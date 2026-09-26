@@ -89,6 +89,34 @@ if(NOT glad_POPULATED)
 endif()
 
 add_subdirectory(${glad_SOURCE_DIR}/cmake glad_cmake)
+
+# GLAD generates its loader with Python and jinja2 at build time. A normal
+# Python install does not include jinja2.
+find_package(Python COMPONENTS Interpreter REQUIRED)
+execute_process(
+    COMMAND "${Python_EXECUTABLE}" -c "import jinja2"
+    RESULT_VARIABLE BLUEPRINT_JINJA2_IMPORT
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
+if(NOT BLUEPRINT_JINJA2_IMPORT EQUAL 0)
+    message(STATUS "Installing jinja2 for GLAD with ${Python_EXECUTABLE}")
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -m pip install --disable-pip-version-check jinja2
+        RESULT_VARIABLE BLUEPRINT_JINJA2_PIP
+    )
+    if(NOT BLUEPRINT_JINJA2_PIP EQUAL 0)
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -m pip install --user --disable-pip-version-check jinja2
+            RESULT_VARIABLE BLUEPRINT_JINJA2_PIP
+        )
+    endif()
+    if(NOT BLUEPRINT_JINJA2_PIP EQUAL 0)
+        message(FATAL_ERROR
+            "GLAD needs the Python package jinja2. Install it with: \"${Python_EXECUTABLE}\" -m pip install jinja2")
+    endif()
+endif()
+
 glad_add_library(glad_gl_core_45 STATIC API gl:core=4.5)
 
 FetchContent_GetProperties(jolt)

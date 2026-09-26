@@ -4,7 +4,7 @@ Minimal C++20 OpenGL 4.5 Core Profile application using GLFW, GLAD and GLM.
 
 ## Windows
 
-Install Visual Studio 2022 with the Desktop development with C++ workload, CMake 3.20 or newer, Git, and Python 3. Python is required because GLAD generates its loader during configuration. A GPU driver with OpenGL 4.5 is required to launch the window.
+Install Visual Studio 2022 with the Desktop development with C++ workload, CMake 3.20 or newer, Git, and Python 3 with pip. GLAD generates its OpenGL loader at build time and needs the Python package jinja2. Configure installs that package when it is missing. A GPU driver with OpenGL 4.5 is required to launch the window.
 
 ```bat
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
