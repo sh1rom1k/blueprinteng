@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "Mesh.hpp"
+#include "Platform.hpp"
 #include "Shader.hpp"
 #include "VtfTexture.hpp"
 
@@ -1205,19 +1206,20 @@ BspLoader::BspLoader(const std::string& path) {
     const std::filesystem::path gameDirectory = mapDirectory.filename() == "maps"
         ? mapDirectory.parent_path()
         : mapDirectory;
+    const std::filesystem::path contentRoot = blueprint::ContentRoot();
     const std::vector<std::filesystem::path> textureRoots = {
-        std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
+        contentRoot / "textures",
         std::filesystem::current_path() / "textures",
         gameDirectory / "textures",
         gameDirectory / "materials",
         mapDirectory / "materials",
     };
     const std::vector<std::filesystem::path> placeholderPaths = {
-        std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures/placeholder.jpg",
-        std::filesystem::current_path() / "textures/placeholder.jpg",
+        contentRoot / "textures" / "placeholder.jpg",
+        std::filesystem::current_path() / "textures" / "placeholder.jpg",
     };
     const std::vector<std::filesystem::path> vpkRoots = {
-        std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
+        contentRoot / "textures",
         std::filesystem::current_path() / "textures",
         gameDirectory / "textures",
     };
@@ -1226,10 +1228,19 @@ BspLoader::BspLoader(const std::string& path) {
         if (!std::filesystem::exists(vpkRoot) || !std::filesystem::is_directory(vpkRoot)) {
             continue;
         }
-        for (const auto& entry : std::filesystem::directory_iterator(vpkRoot)) {
+        for (const auto& entry : std::filesystem::directory_iterator(
+                 vpkRoot,
+                 std::filesystem::directory_options::skip_permission_denied)) {
             const std::string vpkName = entry.path().filename().string();
-            if (entry.is_regular_file() && vpkName.size() >= 8
-                && vpkName.substr(vpkName.size() - 8) == "_dir.vpk"
+            const bool directoryArchive = vpkName.size() >= 8
+                && std::equal(
+                    vpkName.end() - 8,
+                    vpkName.end(),
+                    "_dir.vpk",
+                    [](unsigned char left, unsigned char right) {
+                        return std::tolower(left) == std::tolower(right);
+                    });
+            if (entry.is_regular_file() && directoryArchive
                 && std::find(vpkArchives.begin(), vpkArchives.end(), entry.path()) == vpkArchives.end()) {
                 vpkArchives.push_back(entry.path());
             }

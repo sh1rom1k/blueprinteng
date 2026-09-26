@@ -16,6 +16,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+# Keep every static library on the same CRT. Jolt otherwise defaults to /MT while
+# CMake's other dependencies use /MD, which fails the link with LNK2038.
+# Jolt also turns warnings into errors and enables link-time optimization by default;
+# both break a normal application link on MSVC and MinGW.
+if(WIN32)
+    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+    set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+    if(MSVC)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+    endif()
+endif()
 
 FetchContent_Declare(
     glfw
@@ -95,6 +110,7 @@ endif()
 add_executable(
     blueprinteng
     src/main.cpp
+    src/Platform.cpp
     src/Mesh.cpp
     src/Shader.cpp
     src/bsp_loader.cpp
@@ -121,17 +137,46 @@ target_include_directories(
 )
 target_link_libraries(blueprinteng PRIVATE glfw glad_gl_core_45 glm::glm Jolt)
 
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" BLUEPRINT_SOURCE_DIR_PATH)
 target_compile_definitions(
     blueprinteng
     PRIVATE
         GLFW_INCLUDE_NONE
-        BLUEPRINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        BLUEPRINT_SOURCE_DIR="${BLUEPRINT_SOURCE_DIR_PATH}"
 )
 
 if(MSVC)
-    target_compile_options(blueprinteng PRIVATE /W4)
+    target_compile_options(blueprinteng PRIVATE /W4 /bigobj /utf-8 /Zc:__cplusplus /permissive-)
+    target_compile_definitions(
+        blueprinteng
+        PRIVATE
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+            _CRT_SECURE_NO_WARNINGS
+    )
+elseif(WIN32)
+    target_compile_options(blueprinteng PRIVATE -Wall -Wextra -Wpedantic -Wa,-mbig-obj)
+    target_compile_definitions(blueprinteng PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     target_compile_options(blueprinteng PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(WIN32)
+    target_link_libraries(blueprinteng PRIVATE psapi)
+    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT blueprinteng)
+    set_target_properties(blueprinteng PROPERTIES
+        WIN32_EXECUTABLE FALSE
+        VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:blueprinteng>"
+    )
+    foreach(content_dir shaders maps sound textures assets)
+        add_custom_command(
+            TARGET blueprinteng POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/${content_dir}"
+                "$<TARGET_FILE_DIR:blueprinteng>/${content_dir}"
+            VERBATIM
+        )
+    endforeach()
 endif()
 
 if(APPLE)

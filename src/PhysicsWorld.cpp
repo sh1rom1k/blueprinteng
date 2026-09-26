@@ -1,3 +1,7 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "PhysicsWorld.hpp"
 
 #include <algorithm>
@@ -127,6 +131,15 @@ public:
         ioSettings.mCanReceiveImpulses = true;
     }
 };
+
+int PhysicsWorkerCount() {
+    const unsigned hardwareThreads = std::thread::hardware_concurrency();
+    if (hardwareThreads <= 1) {
+        return 1;
+    }
+    return static_cast<int>(hardwareThreads - 1);
+}
+
 }
 
 struct PhysicsWorld::Impl {
@@ -138,7 +151,7 @@ struct PhysicsWorld::Impl {
     JobSystemThreadPool jobSystem{
         cMaxPhysicsJobs,
         cMaxPhysicsBarriers,
-        static_cast<int>(std::max(1u, std::thread::hardware_concurrency() - 1))
+        PhysicsWorkerCount()
     };
     BodyID worldBody;
     std::vector<BodyID> dynamicBoxes;

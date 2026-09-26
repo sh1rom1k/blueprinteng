@@ -1,15 +1,12 @@
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <cmath>
 #include <string>
 #include <vector>
-#if defined(__linux__)
-#include <unistd.h>
-#endif
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -19,6 +16,7 @@
 #include "AudioSystem.hpp"
 #include "BspLoader.hpp"
 #include "Mesh.hpp"
+#include "Platform.hpp"
 #include "PhysicsWorld.hpp"
 #include "PlayerController.hpp"
 #include "Shader.hpp"
@@ -100,20 +98,12 @@ struct SpotLight {
 
 constexpr std::size_t kMaxPointLights = 32;
 
-// Query current process Resident Set Size (RSS) in Megabytes on Linux
-float GetProcessRamUsageMb() {
-#if defined(__linux__)
-    std::ifstream statm("/proc/self/statm");
-    if (statm.is_open()) {
-        unsigned long size = 0;
-        unsigned long resident = 0;
-        if (statm >> size >> resident) {
-            long pageSizeKb = sysconf(_SC_PAGE_SIZE) / 1024;
-            return static_cast<float>(resident * pageSizeKb) / 1024.0F;
-        }
-    }
-#endif
-    return 0.0F;
+bool HasBspExtension(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return extension == ".bsp";
 }
 
 // Query VRAM memory usage (dedicated memory info via NVX / ATI extensions if supported)
@@ -562,7 +552,10 @@ int main(int argc, char* argv[]) {
 
     try {
         ui::OpenGLUIRenderBackend uiBackend;
-        if (!uiBackend.Initialize(window, BLUEPRINT_SOURCE_DIR)) {
+        const std::filesystem::path contentRoot = blueprint::ContentRoot();
+        const std::string contentRootString = contentRoot.generic_string();
+
+        if (!uiBackend.Initialize(window, contentRootString.c_str())) {
             std::cerr << "Failed to initialize OpenGL UI Backend\n";
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -570,19 +563,21 @@ int main(int argc, char* argv[]) {
         }
 
         Shader shader(
-            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/basic.vert",
-            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/basic.frag"
+            contentRootString + "/shaders/basic.vert",
+            contentRootString + "/shaders/basic.frag"
         );
         shader.CacheLightUniformLocations();
 
         ShadowManager shadowManager;
-        shadowManager.Init(BLUEPRINT_SOURCE_DIR);
+        shadowManager.Init(contentRootString);
 
         std::vector<std::filesystem::path> mapFiles;
-        const std::filesystem::path mapsDirectory = std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "maps";
+        const std::filesystem::path mapsDirectory = contentRoot / "maps";
         if (std::filesystem::exists(mapsDirectory)) {
-            for (const auto& entry : std::filesystem::directory_iterator(mapsDirectory)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".bsp") {
+            for (const auto& entry : std::filesystem::directory_iterator(
+                     mapsDirectory,
+                     std::filesystem::directory_options::skip_permission_denied)) {
+                if (entry.is_regular_file() && HasBspExtension(entry.path())) {
                     mapFiles.push_back(entry.path());
                 }
             }
@@ -592,9 +587,9 @@ int main(int argc, char* argv[]) {
         const bool autoStart = argc > 2 && std::string(argv[1]) == "--autostart";
         if (argc > 1) {
             const char* requestedPath = autoStart ? argv[2] : argv[1];
-            const std::filesystem::path requestedMap = std::filesystem::absolute(requestedPath);
             for (std::size_t index = 0; index < mapFiles.size(); ++index) {
-                if (std::filesystem::absolute(mapFiles[index]) == requestedMap) {
+                std::error_code equivalentError;
+                if (std::filesystem::equivalent(mapFiles[index], requestedPath, equivalentError)) {
                     selectedMap = static_cast<int>(index);
                     break;
                 }
@@ -617,7 +612,6 @@ int main(int argc, char* argv[]) {
         bool returnToMenuRequested = false;
 
         AudioSystem audio;
-        const std::filesystem::path contentRoot = BLUEPRINT_SOURCE_DIR;
         const bool audioReady = audio.Initialize(contentRoot);
         ui::NullUISoundBackend nullMenuSound;
         ui::WavUISoundBackend menuSound(&audio);
@@ -897,7 +891,7 @@ int main(int argc, char* argv[]) {
             ramCheckTimer += deltaTime;
             if (ramCheckTimer >= 0.5F || displayedRamMb <= 0.0F) {
                 ramCheckTimer = 0.0F;
-                displayedRamMb = GetProcessRamUsageMb();
+                displayedRamMb = blueprint::ProcessRamUsageMb();
                 GetVramUsageMb(displayedVramUsedMb, displayedVramTotalMb);
             }
 

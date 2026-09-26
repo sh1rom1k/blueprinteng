@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -227,6 +228,20 @@ bool OpenGLUIRenderBackend::LoadFonts(const char* contentRoot) {
         regularCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSans.ttf");
         monoCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSansMono.ttf");
     }
+#if defined(_WIN32)
+    if (const char* windowsDirectory = std::getenv("WINDIR")) {
+        const std::string fonts = std::string(windowsDirectory) + "/Fonts/";
+        regularCandidates.push_back(fonts + "arial.ttf");
+        regularCandidates.push_back(fonts + "segoeui.ttf");
+        monoCandidates.push_back(fonts + "consola.ttf");
+        monoCandidates.push_back(fonts + "cour.ttf");
+    } else {
+        regularCandidates.push_back("C:/Windows/Fonts/arial.ttf");
+        regularCandidates.push_back("C:/Windows/Fonts/segoeui.ttf");
+        monoCandidates.push_back("C:/Windows/Fonts/consola.ttf");
+        monoCandidates.push_back("C:/Windows/Fonts/cour.ttf");
+    }
+#endif
     regularCandidates.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
     regularCandidates.push_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
     regularCandidates.push_back("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf");
