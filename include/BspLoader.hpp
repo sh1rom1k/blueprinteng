@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,7 +24,7 @@ struct BspMapEntity {
 
 class BspLoader {
 public:
-    explicit BspLoader(const std::string& path);
+    BspLoader(const std::string& path, const std::filesystem::path& gameDirectory);
     ~BspLoader();
 
     BspLoader(const BspLoader&) = delete;

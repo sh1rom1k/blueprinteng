@@ -228,6 +228,15 @@ LoadedMaterialTexture LoadMaterialTexture(
             break;
         }
     }
+    if (std::filesystem::exists(texturePath)) {
+        try {
+            loaded.texture = vtf::LoadVtfTexture(texturePath.string());
+            loaded.ownsTexture = true;
+            return loaded;
+        } catch (const std::exception& error) {
+            std::cerr << "Skipping texture " << texturePath << ": " << error.what() << '\n';
+        }
+    }
     std::string internalTexturePath = material;
     if (internalTexturePath.rfind("materials/", 0) != 0) {
         internalTexturePath = "materials/" + internalTexturePath;
@@ -242,14 +251,6 @@ LoadedMaterialTexture LoadMaterialTexture(
         if (loaded.texture != 0) {
             loaded.ownsTexture = true;
             return loaded;
-        }
-    }
-    if (std::filesystem::exists(texturePath)) {
-        try {
-            loaded.texture = vtf::LoadVtfTexture(texturePath.string());
-            loaded.ownsTexture = true;
-        } catch (const std::exception& error) {
-            std::cerr << "Skipping texture " << texturePath << ": " << error.what() << '\n';
         }
     }
     if (loaded.texture == 0 && context.placeholderTexture != nullptr) {
@@ -1168,7 +1169,7 @@ struct BspLoader::Decal {
     glm::vec3 aabbMax{-1.0e9F};
 };
 
-BspLoader::BspLoader(const std::string& path) {
+BspLoader::BspLoader(const std::string& path, const std::filesystem::path& gameDirectory) {
     LoadedGeometry loaded = LoadGeometry(path, faceCount_, worldMinimum_, worldMaximum_);
     std::vector<BatchGeometry> geometry = std::move(loaded.batches);
     propPositions_ = std::move(loaded.propPositions);
@@ -1202,24 +1203,38 @@ BspLoader::BspLoader(const std::string& path) {
         }
     }
     const std::filesystem::path mapDirectory = std::filesystem::path(path).parent_path();
-    const std::filesystem::path gameDirectory = mapDirectory.filename() == "maps"
+    const std::filesystem::path mapGameDirectory = mapDirectory.filename() == "maps"
         ? mapDirectory.parent_path()
         : mapDirectory;
-    const std::vector<std::filesystem::path> textureRoots = {
-        std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
-        std::filesystem::current_path() / "textures",
-        gameDirectory / "textures",
-        gameDirectory / "materials",
-        mapDirectory / "materials",
-    };
+    const std::filesystem::path contentDirectory = gameDirectory.empty() ? mapGameDirectory : gameDirectory;
+    std::vector<std::filesystem::path> textureRoots;
+    std::vector<std::filesystem::path> vpkRoots;
+    if (!gameDirectory.empty()) {
+        textureRoots = {
+            contentDirectory / "materials",
+        };
+        vpkRoots = {
+            contentDirectory,
+        };
+        std::cout << "Game content directory: " << contentDirectory << std::endl;
+    } else {
+        textureRoots = {
+            std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
+            std::filesystem::current_path() / "textures",
+            contentDirectory / "textures",
+            contentDirectory / "materials",
+            mapDirectory / "materials",
+        };
+        vpkRoots = {
+            std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
+            std::filesystem::current_path() / "textures",
+            contentDirectory / "textures",
+            contentDirectory,
+        };
+    }
     const std::vector<std::filesystem::path> placeholderPaths = {
         std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures/placeholder.jpg",
         std::filesystem::current_path() / "textures/placeholder.jpg",
-    };
-    const std::vector<std::filesystem::path> vpkRoots = {
-        std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
-        std::filesystem::current_path() / "textures",
-        gameDirectory / "textures",
     };
     std::vector<std::filesystem::path> vpkArchives;
     for (const auto& vpkRoot : vpkRoots) {
@@ -1234,6 +1249,9 @@ BspLoader::BspLoader(const std::string& path) {
                 vpkArchives.push_back(entry.path());
             }
         }
+    }
+    if (!gameDirectory.empty()) {
+        std::cout << "Mounted " << vpkArchives.size() << " VPK archives from " << contentDirectory << std::endl;
     }
     MaterialTextureContext textureContext{textureRoots, vpkArchives, placeholderPaths, &placeholderTexture_};
     std::unordered_map<std::string, LoadedMaterialTexture> materialCache;

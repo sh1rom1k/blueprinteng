@@ -6,9 +6,16 @@
 #include <memory>
 #include <cmath>
 #include <string>
+#include <system_error>
 #include <vector>
 #if defined(__linux__)
 #include <unistd.h>
+#elif defined(__APPLE__)
+#include <cstdint>
+#include <mach-o/dyld.h>
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 #include <glad/gl.h>
@@ -366,6 +373,90 @@ void ProcessInput(
     }
     state.hWasPressed = hPressed;
 }
+
+struct LaunchOptions {
+    std::string game;
+    bool autoStart = false;
+    std::filesystem::path mapPath;
+};
+
+LaunchOptions ParseLaunchOptions(int argc, char* argv[]) {
+    LaunchOptions options;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "-game" || argument == "--game") {
+            if (index + 1 >= argc) {
+                std::cerr << "Missing game name after " << argument << '\n';
+                continue;
+            }
+            options.game = argv[++index];
+        } else if (argument == "--autostart") {
+            options.autoStart = true;
+        } else if (options.mapPath.empty() && !argument.empty() && argument[0] != '-') {
+            options.mapPath = argument;
+        }
+    }
+    return options;
+}
+
+std::filesystem::path ExecutableDirectory(const char* argv0) {
+#if defined(__linux__)
+    std::error_code error;
+    const std::filesystem::path executable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error && !executable.empty()) {
+        return executable.parent_path();
+    }
+#elif defined(__APPLE__)
+    char buffer[4096];
+    std::uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0) {
+        std::error_code error;
+        const std::filesystem::path executable = std::filesystem::weakly_canonical(buffer, error);
+        if (!error) {
+            return executable.parent_path();
+        }
+        return std::filesystem::path(buffer).parent_path();
+    }
+#elif defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length > 0 && length < buffer.size()) {
+        buffer.resize(length);
+        return std::filesystem::path(buffer).parent_path();
+    }
+#endif
+    if (argv0 != nullptr && argv0[0] != '\0') {
+        std::error_code error;
+        const std::filesystem::path executable = std::filesystem::weakly_canonical(argv0, error);
+        if (!error) {
+            return executable.parent_path();
+        }
+        return std::filesystem::absolute(argv0).parent_path();
+    }
+    return std::filesystem::current_path();
+}
+
+std::filesystem::path ResolveGameDirectory(
+    const std::filesystem::path& executableDirectory,
+    const std::string& game
+) {
+    const std::filesystem::path gamePath(game);
+    if (gamePath.is_absolute()) {
+        return gamePath;
+    }
+    return executableDirectory / gamePath;
+}
+
+void CollectMapFiles(const std::filesystem::path& mapsDirectory, std::vector<std::filesystem::path>& mapFiles) {
+    if (!std::filesystem::exists(mapsDirectory) || !std::filesystem::is_directory(mapsDirectory)) {
+        return;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(mapsDirectory)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".bsp") {
+            mapFiles.push_back(entry.path());
+        }
+    }
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -578,23 +669,30 @@ int main(int argc, char* argv[]) {
         ShadowManager shadowManager;
         shadowManager.Init(BLUEPRINT_SOURCE_DIR);
 
+        const LaunchOptions launchOptions = ParseLaunchOptions(argc, argv);
+        const std::filesystem::path executableDirectory = ExecutableDirectory(argc > 0 ? argv[0] : nullptr);
+        std::filesystem::path gameDirectory;
         std::vector<std::filesystem::path> mapFiles;
-        const std::filesystem::path mapsDirectory = std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "maps";
-        if (std::filesystem::exists(mapsDirectory)) {
-            for (const auto& entry : std::filesystem::directory_iterator(mapsDirectory)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".bsp") {
-                    mapFiles.push_back(entry.path());
-                }
+        if (!launchOptions.game.empty()) {
+            gameDirectory = ResolveGameDirectory(executableDirectory, launchOptions.game);
+            if (!std::filesystem::is_directory(gameDirectory)) {
+                std::cerr << "Game directory not found next to the executable: " << gameDirectory << '\n';
+            } else {
+                std::cout << "Game: " << launchOptions.game << " (" << gameDirectory << ")\n";
+                CollectMapFiles(gameDirectory / "maps", mapFiles);
             }
+        } else {
+            CollectMapFiles(std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "maps", mapFiles);
         }
         std::sort(mapFiles.begin(), mapFiles.end());
         int selectedMap = 0;
-        const bool autoStart = argc > 2 && std::string(argv[1]) == "--autostart";
-        if (argc > 1) {
-            const char* requestedPath = autoStart ? argv[2] : argv[1];
-            const std::filesystem::path requestedMap = std::filesystem::absolute(requestedPath);
+        const bool autoStart = launchOptions.autoStart;
+        if (!launchOptions.mapPath.empty()) {
+            const std::filesystem::path requestedMap = std::filesystem::absolute(launchOptions.mapPath);
             for (std::size_t index = 0; index < mapFiles.size(); ++index) {
-                if (std::filesystem::absolute(mapFiles[index]) == requestedMap) {
+                if (std::filesystem::absolute(mapFiles[index]) == requestedMap
+                    || mapFiles[index].filename() == launchOptions.mapPath
+                    || mapFiles[index].stem() == launchOptions.mapPath) {
                     selectedMap = static_cast<int>(index);
                     break;
                 }
@@ -774,7 +872,10 @@ int main(int argc, char* argv[]) {
                 if (selectedMap < static_cast<int>(mapFiles.size())) {
                     windowState.noclip = mapTestRequested;
                     camera.pitch = -18.0F;
-                    bspMap = std::make_unique<BspLoader>(mapFiles[static_cast<std::size_t>(selectedMap)].string());
+                    bspMap = std::make_unique<BspLoader>(
+                        mapFiles[static_cast<std::size_t>(selectedMap)].string(),
+                        gameDirectory
+                    );
                     std::cout << "BSP assets ready" << std::endl;
                     physicsWorld.SetCollisionMesh(bspMap->CollisionVertices(), bspMap->CollisionIndices());
                     physicsWorld.SetDynamicBoxes(bspMap->PropPositions());
