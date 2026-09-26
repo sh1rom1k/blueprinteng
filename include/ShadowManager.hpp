@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <vector>
 #include <memory>
 #include <string>
@@ -28,7 +29,7 @@ public:
     ShadowManager(const ShadowManager&) = delete;
     ShadowManager& operator=(const ShadowManager&) = delete;
 
-    void Init(const std::string& shaderDir);
+    void Init(const std::filesystem::path& shaderDir);
 
     // Spotlight (flashlight) shadow pass
     void BeginSpotlightPass(const glm::vec3& position, const glm::vec3& direction);

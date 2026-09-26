@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -63,7 +64,7 @@ void main() {
 }
 )";
 
-std::vector<unsigned char> ReadBinaryFile(const std::string& path) {
+std::vector<unsigned char> ReadBinaryFile(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
         return {};
@@ -81,7 +82,7 @@ std::vector<unsigned char> ReadBinaryFile(const std::string& path) {
     return buffer;
 }
 
-std::string ReadTextFile(const std::string& path) {
+std::string ReadTextFile(const std::filesystem::path& path) {
     std::ifstream file(path);
     if (!file) {
         return {};
@@ -138,14 +139,14 @@ OpenGLUIRenderBackend::~OpenGLUIRenderBackend() {
     Shutdown();
 }
 
-bool OpenGLUIRenderBackend::Initialize(GLFWwindow* window, const char* contentRoot) {
+bool OpenGLUIRenderBackend::Initialize(GLFWwindow* window, const std::filesystem::path& contentRoot) {
     window_ = window;
 
     std::string vertSrc;
     std::string fragSrc;
-    if (contentRoot != nullptr) {
-        vertSrc = ReadTextFile(std::string(contentRoot) + "/shaders/ui.vert");
-        fragSrc = ReadTextFile(std::string(contentRoot) + "/shaders/ui.frag");
+    if (!contentRoot.empty()) {
+        vertSrc = ReadTextFile(contentRoot / "shaders" / "ui.vert");
+        fragSrc = ReadTextFile(contentRoot / "shaders" / "ui.frag");
     }
     if (vertSrc.empty()) {
         vertSrc = kEmbeddedVertShader;
@@ -220,13 +221,13 @@ void OpenGLUIRenderBackend::Shutdown() {
     fontInitialized_ = false;
 }
 
-bool OpenGLUIRenderBackend::LoadFonts(const char* contentRoot) {
-    std::vector<std::string> regularCandidates;
-    std::vector<std::string> monoCandidates;
+bool OpenGLUIRenderBackend::LoadFonts(const std::filesystem::path& contentRoot) {
+    std::vector<std::filesystem::path> regularCandidates;
+    std::vector<std::filesystem::path> monoCandidates;
 
-    if (contentRoot != nullptr) {
-        regularCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSans.ttf");
-        monoCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSansMono.ttf");
+    if (!contentRoot.empty()) {
+        regularCandidates.push_back(contentRoot / "assets" / "fonts" / "DejaVuSans.ttf");
+        monoCandidates.push_back(contentRoot / "assets" / "fonts" / "DejaVuSansMono.ttf");
     }
 #if defined(_WIN32)
     if (const char* windowsDirectory = std::getenv("WINDIR")) {

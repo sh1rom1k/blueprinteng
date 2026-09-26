@@ -22,6 +22,15 @@
 namespace blueprint {
 namespace {
 
+std::filesystem::path CompiledSourceRoot() {
+#if defined(_WIN32)
+    const auto* bytes = reinterpret_cast<const char8_t*>(BLUEPRINT_SOURCE_DIR);
+    return std::filesystem::path(std::u8string(bytes));
+#else
+    return std::filesystem::path(BLUEPRINT_SOURCE_DIR);
+#endif
+}
+
 bool HasEngineContent(const std::filesystem::path& path) {
     std::error_code error;
     return std::filesystem::is_regular_file(path / "shaders" / "basic.vert", error);
@@ -50,8 +59,15 @@ std::filesystem::path ExecutableDirectory() {
 
 } // namespace
 
+void ConfigurePlatform() {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+}
+
 std::filesystem::path ContentRoot() {
-    const std::filesystem::path compiledRoot{BLUEPRINT_SOURCE_DIR};
+    const std::filesystem::path compiledRoot = CompiledSourceRoot();
     if (HasEngineContent(compiledRoot)) {
         return compiledRoot;
     }

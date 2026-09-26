@@ -4,6 +4,9 @@
 
 namespace blueprint {
 
+// UTF-8 console output and other process settings needed on Windows.
+void ConfigurePlatform();
+
 // Directory that contains shaders, maps, and the other runtime files.
 // Prefers the source tree used at compile time, then the folder containing the
 // executable, then the current working directory.

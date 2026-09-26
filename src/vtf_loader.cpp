@@ -61,7 +61,7 @@ std::uint32_t ReadU32(const std::vector<std::uint8_t>& data, std::size_t offset)
 }
 
 std::vector<std::uint8_t> ReadFile(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(std::filesystem::path(path), std::ios::binary);
     if (!file) {
         Fail("unable to open '" + path + "'");
     }
@@ -81,7 +81,7 @@ std::vector<std::uint8_t> ReadFile(const std::string& path) {
 }
 
 std::vector<std::uint8_t> ReadFileRange(const std::string& path, std::size_t offset, std::size_t length) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(std::filesystem::path(path), std::ios::binary);
     if (!file) {
         Fail("unable to open '" + path + "'");
     }

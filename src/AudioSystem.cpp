@@ -5,10 +5,32 @@
 #include <iostream>
 #include <string>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
 namespace {
+
+std::string Utf8Path(const std::filesystem::path& path) {
+    const std::u8string utf8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+}
+
+ma_result InitSoundFile(
+    ma_engine* engine,
+    const std::filesystem::path& path,
+    ma_uint32 flags,
+    ma_sound* sound
+) {
+#if defined(_WIN32)
+    return ma_sound_init_from_file_w(engine, path.wstring().c_str(), flags, nullptr, nullptr, sound);
+#else
+    return ma_sound_init_from_file(engine, path.string().c_str(), flags, nullptr, nullptr, sound);
+#endif
+}
 
 constexpr ma_uint32 kFootstepSoundFlags =
     MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION;
@@ -54,12 +76,10 @@ bool AudioSystem::Initialize(const std::filesystem::path& contentRoot) {
     impl_->engineReady = true;
 
     const std::filesystem::path ambientPath = Resolve("sound/ambient_loop.wav");
-    const ma_result ambientResult = ma_sound_init_from_file(
+    const ma_result ambientResult = InitSoundFile(
         &impl_->engine,
-        ambientPath.string().c_str(),
+        ambientPath,
         kAmbientSoundFlags,
-        nullptr,
-        nullptr,
         &impl_->ambient
     );
     if (ambientResult != MA_SUCCESS) {
@@ -70,14 +90,12 @@ bool AudioSystem::Initialize(const std::filesystem::path& contentRoot) {
     }
 
     for (std::size_t index = 0; index < impl_->footsteps.size(); ++index) {
-        const std::string footstepPath =
-            Resolve("sound/concrete" + std::to_string(index + 1) + ".wav").string();
-        const ma_result footstepResult = ma_sound_init_from_file(
+        const std::filesystem::path footstepPath =
+            Resolve("sound/concrete" + std::to_string(index + 1) + ".wav");
+        const ma_result footstepResult = InitSoundFile(
             &impl_->engine,
-            footstepPath.c_str(),
+            footstepPath,
             kFootstepSoundFlags,
-            nullptr,
-            nullptr,
             &impl_->footsteps[index]
         );
         if (footstepResult != MA_SUCCESS) {
@@ -127,9 +145,10 @@ void AudioSystem::PlayOneShot(std::string_view relativePath, float volume) {
     }
 
     const std::filesystem::path absolutePath = Resolve(relativePath);
+    const std::string absolutePathUtf8 = Utf8Path(absolutePath);
     const ma_result playResult = ma_engine_play_sound(
         &impl_->engine,
-        absolutePath.string().c_str(),
+        absolutePathUtf8.c_str(),
         nullptr
     );
     if (playResult != MA_SUCCESS) {

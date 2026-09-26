@@ -728,14 +728,14 @@ GLuint UploadLightmapAtlas(const LightmapAtlas& atlas) {
 }
 
 LoadedGeometry LoadGeometry(
-    const std::string& path,
+    const std::filesystem::path& path,
     std::size_t& faceCount,
     glm::vec3& worldMinimum,
     glm::vec3& worldMaximum
 ) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        Fail("unable to open '" + path + "'");
+        Fail("unable to open '" + path.string() + "'");
     }
     file.seekg(0, std::ios::end);
     const auto fileSize = static_cast<std::uintmax_t>(file.tellg());
@@ -1169,7 +1169,7 @@ struct BspLoader::Decal {
     glm::vec3 aabbMax{-1.0e9F};
 };
 
-BspLoader::BspLoader(const std::string& path) {
+BspLoader::BspLoader(const std::filesystem::path& path) {
     LoadedGeometry loaded = LoadGeometry(path, faceCount_, worldMinimum_, worldMaximum_);
     std::vector<BatchGeometry> geometry = std::move(loaded.batches);
     propPositions_ = std::move(loaded.propPositions);

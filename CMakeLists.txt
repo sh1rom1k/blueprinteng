@@ -18,17 +18,18 @@ include(FetchContent)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# Keep every static library on the same CRT. Jolt otherwise defaults to /MT while
-# CMake's other dependencies use /MD, which fails the link with LNK2038.
+# Keep every static library on the static CRT. Jolt defaults to /MT, while CMake
+# otherwise uses /MD, and mixing them fails the link with LNK2038.
 # Jolt also turns warnings into errors and enables link-time optimization by default;
 # both break a normal application link on MSVC and MinGW.
 if(WIN32)
-    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+    # Static CRT so the executable does not depend on vcruntime140.dll.
+    set(USE_STATIC_MSVC_RUNTIME_LIBRARY ON CACHE BOOL "" FORCE)
     set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
     set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
     set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
     if(MSVC)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 endif()
 
@@ -190,6 +191,13 @@ else()
 endif()
 
 if(WIN32)
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/blueprinteng.manifest" BLUEPRINT_MANIFEST_PATH)
+    configure_file(
+        src/windows/blueprinteng.rc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/blueprinteng.rc"
+        @ONLY
+    )
+    target_sources(blueprinteng PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/blueprinteng.rc")
     target_link_libraries(blueprinteng PRIVATE psapi)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT blueprinteng)
     set_target_properties(blueprinteng PROPERTIES

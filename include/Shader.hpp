@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 
@@ -9,7 +10,11 @@
 
 class Shader {
 public:
-    Shader(const std::string& vertexPath, const std::string& fragmentPath, const std::string& geometryPath = "");
+    Shader(
+        const std::filesystem::path& vertexPath,
+        const std::filesystem::path& fragmentPath,
+        const std::filesystem::path& geometryPath = {}
+    );
     ~Shader();
 
     Shader(const Shader&) = delete;
@@ -50,7 +55,7 @@ public:
 
 private:
     GLint GetUniformLocation(const std::string& name) const;
-    static std::string ReadFile(const std::string& path);
+    static std::string ReadFile(const std::filesystem::path& path);
     static GLuint Compile(GLenum type, const std::string& source);
 
     struct PointLightLocs {

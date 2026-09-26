@@ -32,17 +32,17 @@ ShadowManager::~ShadowManager() {
     pointShadowResources_.clear();
 }
 
-void ShadowManager::Init(const std::string& shaderDir) {
-    // 1. Compile shadow depth shaders
+void ShadowManager::Init(const std::filesystem::path& shaderDir) {
+    const std::filesystem::path shaderRoot = shaderDir / "shaders";
     spotlightDepthShader_ = std::make_unique<Shader>(
-        shaderDir + "/shaders/shadow_depth.vert",
-        shaderDir + "/shaders/shadow_depth.frag"
+        shaderRoot / "shadow_depth.vert",
+        shaderRoot / "shadow_depth.frag"
     );
 
     pointDepthShader_ = std::make_unique<Shader>(
-        shaderDir + "/shaders/point_shadow_depth.vert",
-        shaderDir + "/shaders/point_shadow_depth.frag",
-        shaderDir + "/shaders/point_shadow_depth.geom"
+        shaderRoot / "point_shadow_depth.vert",
+        shaderRoot / "point_shadow_depth.frag",
+        shaderRoot / "point_shadow_depth.geom"
     );
 
     // 2. Initialize Spotlight (Flashlight) shadow resources

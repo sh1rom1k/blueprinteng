@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string_view>
 #include <vector>
 
@@ -19,7 +20,7 @@ public:
     OpenGLUIRenderBackend(const OpenGLUIRenderBackend&) = delete;
     OpenGLUIRenderBackend& operator=(const OpenGLUIRenderBackend&) = delete;
 
-    bool Initialize(GLFWwindow* window, const char* contentRoot);
+    bool Initialize(GLFWwindow* window, const std::filesystem::path& contentRoot);
     void Shutdown();
 
     // Frame-level input polling (does not touch any OpenGL state)
@@ -125,7 +126,7 @@ private:
         float u0, float v0, float u1, float v1
     );
 
-    bool LoadFonts(const char* contentRoot);
+    bool LoadFonts(const std::filesystem::path& contentRoot);
     void BuildFallbackBitmapFont();
 
     GLFWwindow* window_ = nullptr;

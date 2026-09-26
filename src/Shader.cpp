@@ -1,5 +1,6 @@
 #include "Shader.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -8,9 +9,9 @@
 #include <glm/gtc/type_ptr.hpp>
 
 Shader::Shader(
-    const std::string& vertexPath,
-    const std::string& fragmentPath,
-    const std::string& geometryPath
+    const std::filesystem::path& vertexPath,
+    const std::filesystem::path& fragmentPath,
+    const std::filesystem::path& geometryPath
 ) {
     const GLuint vertexShader = Compile(GL_VERTEX_SHADER, ReadFile(vertexPath));
     const GLuint fragmentShader = Compile(GL_FRAGMENT_SHADER, ReadFile(fragmentPath));
@@ -182,10 +183,10 @@ void Shader::SetVec3(const std::string& name, const glm::vec3& value) const {
     }
 }
 
-std::string Shader::ReadFile(const std::string& path) {
+std::string Shader::ReadFile(const std::filesystem::path& path) {
     std::ifstream file(path);
     if (!file) {
-        throw std::runtime_error("Unable to open shader file: " + path);
+        throw std::runtime_error("Unable to open shader file: " + path.string());
     }
 
     std::ostringstream source;

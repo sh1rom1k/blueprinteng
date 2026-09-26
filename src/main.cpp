@@ -358,7 +358,13 @@ void ProcessInput(
 }
 } // namespace
 
+void GlfwError(int code, const char* description) {
+    std::cerr << "GLFW error " << code << ": " << (description != nullptr ? description : "") << '\n';
+}
+
 int main(int argc, char* argv[]) {
+    blueprint::ConfigurePlatform();
+    glfwSetErrorCallback(GlfwError);
     if (glfwInit() == GLFW_FALSE) {
         std::cerr << "Failed to initialize GLFW\n";
         return EXIT_FAILURE;
@@ -553,9 +559,8 @@ int main(int argc, char* argv[]) {
     try {
         ui::OpenGLUIRenderBackend uiBackend;
         const std::filesystem::path contentRoot = blueprint::ContentRoot();
-        const std::string contentRootString = contentRoot.generic_string();
 
-        if (!uiBackend.Initialize(window, contentRootString.c_str())) {
+        if (!uiBackend.Initialize(window, contentRoot)) {
             std::cerr << "Failed to initialize OpenGL UI Backend\n";
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -563,13 +568,13 @@ int main(int argc, char* argv[]) {
         }
 
         Shader shader(
-            contentRootString + "/shaders/basic.vert",
-            contentRootString + "/shaders/basic.frag"
+            contentRoot / "shaders" / "basic.vert",
+            contentRoot / "shaders" / "basic.frag"
         );
         shader.CacheLightUniformLocations();
 
         ShadowManager shadowManager;
-        shadowManager.Init(contentRootString);
+        shadowManager.Init(contentRoot);
 
         std::vector<std::filesystem::path> mapFiles;
         const std::filesystem::path mapsDirectory = contentRoot / "maps";
@@ -768,7 +773,7 @@ int main(int argc, char* argv[]) {
                 if (selectedMap < static_cast<int>(mapFiles.size())) {
                     windowState.noclip = mapTestRequested;
                     camera.pitch = -18.0F;
-                    bspMap = std::make_unique<BspLoader>(mapFiles[static_cast<std::size_t>(selectedMap)].string());
+                    bspMap = std::make_unique<BspLoader>(mapFiles[static_cast<std::size_t>(selectedMap)]);
                     std::cout << "BSP assets ready" << std::endl;
                     physicsWorld.SetCollisionMesh(bspMap->CollisionVertices(), bspMap->CollisionIndices());
                     physicsWorld.SetDynamicBoxes(bspMap->PropPositions());
