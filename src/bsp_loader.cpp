@@ -1207,31 +1207,16 @@ BspLoader::BspLoader(const std::string& path, const std::filesystem::path& gameD
         ? mapDirectory.parent_path()
         : mapDirectory;
     const std::filesystem::path contentDirectory = gameDirectory.empty() ? mapGameDirectory : gameDirectory;
-    std::vector<std::filesystem::path> textureRoots;
-    std::vector<std::filesystem::path> vpkRoots;
-    if (!gameDirectory.empty()) {
-        textureRoots = {
-            contentDirectory / "materials",
-        };
-        vpkRoots = {
-            contentDirectory,
-        };
-        std::cout << "Game content directory: " << contentDirectory << std::endl;
-    } else {
-        textureRoots = {
-            std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
-            std::filesystem::current_path() / "textures",
-            contentDirectory / "textures",
-            contentDirectory / "materials",
-            mapDirectory / "materials",
-        };
-        vpkRoots = {
-            std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures",
-            std::filesystem::current_path() / "textures",
-            contentDirectory / "textures",
-            contentDirectory,
-        };
-    }
+    // Loose VTFs are in <game>/materials. Directory packs such as
+    // hl2_textures_dir.vpk sit directly in <game>.
+    const std::vector<std::filesystem::path> textureRoots = {
+        contentDirectory / "materials",
+        mapDirectory / "materials",
+    };
+    const std::vector<std::filesystem::path> vpkRoots = {
+        contentDirectory,
+    };
+    std::cout << "Game content directory: " << contentDirectory << std::endl;
     const std::vector<std::filesystem::path> placeholderPaths = {
         std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "textures/placeholder.jpg",
         std::filesystem::current_path() / "textures/placeholder.jpg",
@@ -1250,8 +1235,9 @@ BspLoader::BspLoader(const std::string& path, const std::filesystem::path& gameD
             }
         }
     }
-    if (!gameDirectory.empty()) {
-        std::cout << "Mounted " << vpkArchives.size() << " VPK archives from " << contentDirectory << std::endl;
+    std::cout << "Mounted " << vpkArchives.size() << " VPK archives from " << contentDirectory << std::endl;
+    for (const auto& archive : vpkArchives) {
+        std::cout << "  " << archive.filename().string() << std::endl;
     }
     MaterialTextureContext textureContext{textureRoots, vpkArchives, placeholderPaths, &placeholderTexture_};
     std::unordered_map<std::string, LoadedMaterialTexture> materialCache;
