@@ -198,6 +198,11 @@ if(WIN32)
         @ONLY
     )
     target_sources(blueprinteng PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/blueprinteng.rc")
+    if(MSVC)
+        # The resource file already embeds the manifest. The linker also emits
+        # one by default, and cvtres then fails with CVT1100.
+        target_link_options(blueprinteng PRIVATE "/MANIFEST:NO")
+    endif()
     target_link_libraries(blueprinteng PRIVATE psapi)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT blueprinteng)
     set_target_properties(blueprinteng PROPERTIES
