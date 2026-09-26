@@ -28,7 +28,7 @@ if(WIN32)
     set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
     set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
     if(MSVC)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
 endif()
 
