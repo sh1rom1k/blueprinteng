@@ -7,3 +7,4 @@ textures/*.sound.cache
 
 # Installed game content. Keep this out of the repo.
 /game/
+/maps/
