@@ -34,7 +34,7 @@ The window title becomes the `game` string from `gameinfo.txt` when a folder mou
 
 ## How it was built
 
-This repo is **vibecoded**.
+This repo is **vibecoded**. Not a single line of the code is written by a human (btw only this line of the readme.md is written by a human lol)
 
 There was no engine design document and no plan to clone every Source system. Features showed up the way a late-night prototype does: load a BSP, then textures, then collision, then “the NPC should walk,” then “that door should open,” then “the pause menu should look orange.” Most of the code was written in [Cursor](https://cursor.com) with an AI pair, iterated until a map was fun to stand in, then committed. `.github/copilot-instructions.md` is the house rule: C++20, real OpenGL, no giant third-party engines.
 
