@@ -1,5 +1,7 @@
 #include "AudioSystem.hpp"
 
+#include "GameFileSystem.hpp"
+
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -34,12 +36,13 @@ AudioSystem::~AudioSystem() {
     Shutdown();
 }
 
-bool AudioSystem::Initialize(const std::filesystem::path& contentRoot) {
+bool AudioSystem::Initialize(const std::filesystem::path& contentRoot, const GameFileSystem* files) {
     if (impl_->engineReady) {
         return true;
     }
 
     contentRoot_ = contentRoot;
+    files_ = files;
     ma_engine_config engineConfig = ma_engine_config_init();
     engineConfig.channels = 2;
     engineConfig.sampleRate = 44100;
@@ -118,6 +121,12 @@ void AudioSystem::Shutdown() {
 }
 
 std::filesystem::path AudioSystem::Resolve(std::string_view relativePath) const {
+    if (files_ != nullptr && files_->Exists(relativePath)) {
+        const std::filesystem::path materialized = files_->Materialize(relativePath);
+        if (!materialized.empty()) {
+            return materialized;
+        }
+    }
     return contentRoot_ / relativePath;
 }
 

@@ -36,6 +36,15 @@ public:
     virtual void DrawFilledRect(const Vec2& min, const Vec2& max, Color color) = 0;
     virtual void DrawRectBorder(const Vec2& min, const Vec2& max, Color color, float thickness) = 0;
     virtual void DrawLine(const Vec2& p0, const Vec2& p1, Color color, float thickness = 1.0F) = 0;
+    virtual void DrawImage(
+        const Vec2& min,
+        const Vec2& max,
+        unsigned int texture,
+        float u0 = 0.0F,
+        float v0 = 0.0F,
+        float u1 = 1.0F,
+        float v1 = 1.0F
+    ) = 0;
 
     // Classic Valve bevel styling: light top/left, dark bottom/right
     virtual void DrawBevelRect(

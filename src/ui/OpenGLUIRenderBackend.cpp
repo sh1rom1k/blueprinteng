@@ -53,9 +53,12 @@ uniform int uUseTexture;
 out vec4 FragColor;
 
 void main() {
-    if (uUseTexture != 0) {
+    if (uUseTexture == 1) {
         float alpha = texture(uFontTexture, vUV).r;
         FragColor = vec4(vColor.rgb, vColor.a * alpha);
+    } else if (uUseTexture == 2) {
+        vec4 texel = texture(uFontTexture, vUV);
+        FragColor = vec4(texel.rgb, texel.a * vColor.a);
     } else {
         FragColor = vColor;
     }
@@ -223,6 +226,9 @@ bool OpenGLUIRenderBackend::LoadFonts(const char* contentRoot) {
     std::vector<std::string> regularCandidates;
     std::vector<std::string> monoCandidates;
 
+#if defined(_WIN32)
+    regularCandidates.push_back("C:\\Windows\\Fonts\\tahoma.ttf");
+#endif
     if (contentRoot != nullptr) {
         regularCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSans.ttf");
         monoCandidates.push_back(std::string(contentRoot) + "/assets/fonts/DejaVuSansMono.ttf");
@@ -407,7 +413,8 @@ void OpenGLUIRenderBackend::BeginRender(int framebufferWidth, int framebufferHei
     framebufferWidth_ = std::max(framebufferWidth, 1);
     framebufferHeight_ = std::max(framebufferHeight, 1);
     batch_.clear();
-    drawingSolid_ = true;
+    batchKind_ = UiBatchKind::Solid;
+    imageTexture_ = 0;
 
     // Save current OpenGL states so 3D pipeline is not affected
     glGetBooleanv(GL_DEPTH_TEST, reinterpret_cast<GLboolean*>(&savedDepthTest_));
@@ -438,10 +445,19 @@ void OpenGLUIRenderBackend::Flush() {
 
     glUseProgram(program_);
     glUniform2f(locDisplaySize_, static_cast<float>(framebufferWidth_), static_cast<float>(framebufferHeight_));
-    glUniform1i(locUseTexture_, drawingSolid_ ? 0 : 1);
-    if (!drawingSolid_ && fontTexture_ != 0) {
+    int textureMode = 0;
+    unsigned int boundTexture = 0;
+    if (batchKind_ == UiBatchKind::Font) {
+        textureMode = 1;
+        boundTexture = fontTexture_;
+    } else if (batchKind_ == UiBatchKind::Image) {
+        textureMode = 2;
+        boundTexture = imageTexture_;
+    }
+    glUniform1i(locUseTexture_, textureMode);
+    if (boundTexture != 0) {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, fontTexture_);
+        glBindTexture(GL_TEXTURE_2D, boundTexture);
     }
 
     glBindVertexArray(vao_);
@@ -451,11 +467,22 @@ void OpenGLUIRenderBackend::Flush() {
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    if (!drawingSolid_) {
+    if (boundTexture != 0) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     batch_.clear();
+}
+
+void OpenGLUIRenderBackend::EnsureBatch(UiBatchKind kind, unsigned int imageTexture) {
+    const bool imageChanged = kind == UiBatchKind::Image && imageTexture != imageTexture_;
+    if ((!batch_.empty() && (batchKind_ != kind || imageChanged)) || batch_.size() >= 4096) {
+        Flush();
+    }
+    batchKind_ = kind;
+    if (kind == UiBatchKind::Image) {
+        imageTexture_ = imageTexture;
+    }
 }
 
 void OpenGLUIRenderBackend::EndRender() {
@@ -505,10 +532,7 @@ bool OpenGLUIRenderBackend::WasMouseButtonReleased(MouseButton button) const {
 }
 
 void OpenGLUIRenderBackend::PushSolidQuad(float x0, float y0, float x1, float y1, Color color) {
-    if ((!drawingSolid_ && !batch_.empty()) || batch_.size() >= 4096) {
-        Flush();
-    }
-    drawingSolid_ = true;
+    EnsureBatch(UiBatchKind::Solid);
     const UiVertex v[6] = {
         {x0, y0, color.r, color.g, color.b, color.a, 0.0F, 0.0F},
         {x1, y0, color.r, color.g, color.b, color.a, 0.0F, 0.0F},
@@ -525,10 +549,7 @@ void OpenGLUIRenderBackend::PushTexturedQuad(
     Color color,
     float u0, float v0, float u1, float v1
 ) {
-    if ((drawingSolid_ && !batch_.empty()) || batch_.size() >= 4096) {
-        Flush();
-    }
-    drawingSolid_ = false;
+    EnsureBatch(UiBatchKind::Font);
     const UiVertex v[6] = {
         {x0, y0, color.r, color.g, color.b, color.a, u0, v0},
         {x1, y0, color.r, color.g, color.b, color.a, u1, v0},
@@ -542,6 +563,31 @@ void OpenGLUIRenderBackend::PushTexturedQuad(
 
 void OpenGLUIRenderBackend::DrawFilledRect(const Vec2& min, const Vec2& max, Color color) {
     PushSolidQuad(min.x, min.y, max.x, max.y, color);
+}
+
+void OpenGLUIRenderBackend::DrawImage(
+    const Vec2& min,
+    const Vec2& max,
+    unsigned int texture,
+    float u0,
+    float v0,
+    float u1,
+    float v1
+) {
+    if (texture == 0) {
+        return;
+    }
+    EnsureBatch(UiBatchKind::Image, texture);
+    const Color color = Color::White();
+    const UiVertex vertices[6] = {
+        {min.x, min.y, color.r, color.g, color.b, color.a, u0, v0},
+        {max.x, min.y, color.r, color.g, color.b, color.a, u1, v0},
+        {max.x, max.y, color.r, color.g, color.b, color.a, u1, v1},
+        {min.x, min.y, color.r, color.g, color.b, color.a, u0, v0},
+        {max.x, max.y, color.r, color.g, color.b, color.a, u1, v1},
+        {min.x, max.y, color.r, color.g, color.b, color.a, u0, v1},
+    };
+    batch_.insert(batch_.end(), std::begin(vertices), std::end(vertices));
 }
 
 void OpenGLUIRenderBackend::DrawRectBorder(const Vec2& min, const Vec2& max, Color color, float thickness) {
@@ -572,10 +618,7 @@ void OpenGLUIRenderBackend::DrawLine(const Vec2& p0, const Vec2& p1, Color color
     const float nx = -dy / len * halfT;
     const float ny = dx / len * halfT;
 
-    if ((!drawingSolid_ && !batch_.empty()) || batch_.size() >= 4096) {
-        Flush();
-    }
-    drawingSolid_ = true;
+    EnsureBatch(UiBatchKind::Solid);
 
     const UiVertex v[6] = {
         {p0.x + nx, p0.y + ny, color.r, color.g, color.b, color.a, 0.0F, 0.0F},

@@ -323,7 +323,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
 
     backend.DrawTextEx(
         {titleMin.x + 14.0F, titleMin.y + 9.0F},
-        "GAME PAUSED — VGUI2 SYSTEM OPTIONS",
+        "Options",
         18.0F,
         Color::ValveOrange(),
         TextAlign::Left,
@@ -354,7 +354,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
     );
     backend.DrawTextEx(
         {tab0Rect_.x0 + tabW * 0.5F, tab0Rect_.y0 + 6.0F},
-        "AUDIO & VIDEO",
+        "Video",
         16.0F,
         (activeTab_ == 0) ? Color::ValveOrange() : (tab0Hover ? Color::White() : Color::ValveTextDim()),
         TextAlign::Center,
@@ -374,7 +374,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
     );
     backend.DrawTextEx(
         {tab1Rect_.x0 + tabW * 0.5F, tab1Rect_.y0 + 6.0F},
-        "LIGHTING & SHADOWS",
+        "Lighting",
         16.0F,
         (activeTab_ == 1) ? Color::ValveOrange() : (tab1Hover ? Color::White() : Color::ValveTextDim()),
         TextAlign::Center,
@@ -527,7 +527,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
         backend,
         {btnResumeRect_.x0, btnResumeRect_.y0},
         {btnResumeRect_.x1, btnResumeRect_.y1},
-        "RESUME GAME",
+        "Resume",
         btnResumeRect_.Contains(mouse),
         true
     );
@@ -536,7 +536,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
         backend,
         {btnMenuRect_.x0, btnMenuRect_.y0},
         {btnMenuRect_.x1, btnMenuRect_.y1},
-        "MAIN MENU",
+        "Main Menu",
         btnMenuRect_.Contains(mouse),
         false
     );
@@ -545,7 +545,7 @@ void VguiPauseMenu::Render(IUIRenderBackend& backend, float /*timeSeconds*/) {
         backend,
         {btnQuitRect_.x0, btnQuitRect_.y0},
         {btnQuitRect_.x1, btnQuitRect_.y1},
-        "QUIT",
+        "Quit",
         btnQuitRect_.Contains(mouse),
         false
     );

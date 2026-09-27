@@ -22,6 +22,7 @@ public:
     void SetInt(const std::string& name, int value) const;
     void SetBool(const std::string& name, bool value) const;
     void SetFloat(const std::string& name, float value) const;
+    void SetFloatArray(const std::string& name, const float* values, int count) const;
     void SetVec3(const std::string& name, const glm::vec3& value) const;
 
     // Fast light uniform uploads avoiding per-frame string formatting and map lookups
@@ -46,6 +47,25 @@ public:
         float linear,
         float quadratic,
         bool enabled
+    ) const;
+    void SetMapSpotUniform(
+        int index,
+        const glm::vec3& position,
+        const glm::vec3& direction,
+        const glm::vec3& color,
+        float intensity,
+        float innerCutOff,
+        float outerCutOff,
+        float constant,
+        float linear,
+        float quadratic,
+        bool enabled
+    ) const;
+    void SetSunUniform(
+        const glm::vec3& direction,
+        const glm::vec3& color,
+        float intensity,
+        const glm::vec3& ambient
     ) const;
 
 private:
@@ -79,4 +99,9 @@ private:
     mutable bool lightUniformsCached_ = false;
     mutable PointLightLocs pointLightLocs_[32];
     mutable SpotLightLocs spotLightLocs_{};
+    mutable SpotLightLocs mapSpotLocs_[8]{};
+    mutable GLint sunDirectionLoc_ = -1;
+    mutable GLint sunColorLoc_ = -1;
+    mutable GLint sunIntensityLoc_ = -1;
+    mutable GLint sunAmbientLoc_ = -1;
 };

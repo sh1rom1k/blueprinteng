@@ -23,6 +23,12 @@ void MainMenu::Initialize(IUISoundBackend* soundBackend) {
     activePulse_ = 0.0F;
     lastHoveredIndex_ = -1;
     mapCount_ = 1;
+    chapterCount_ = 0;
+    chapterIndex_ = 0;
+    difficultyIndex_ = 1;
+    hoverChapter_ = -1;
+    hoverDifficulty_ = -1;
+    chapterSelectOpen_ = false;
 }
 
 void MainMenu::SyncOptionsFromEngine(bool fullscreen, float mouseSensitivity, int selectedMapIndex) {
@@ -34,6 +40,60 @@ void MainMenu::SyncOptionsFromEngine(bool fullscreen, float mouseSensitivity, in
 void MainMenu::SetMapCount(int mapCount) {
     mapCount_ = std::max(mapCount, 1);
     options_.selectedMapIndex = std::clamp(options_.selectedMapIndex, 0, mapCount_ - 1);
+}
+
+void MainMenu::SetChapterCount(int chapterCount) {
+    chapterCount_ = std::max(chapterCount, 0);
+    if (chapterCount_ == 0) {
+        chapterIndex_ = 0;
+        chapterSelectOpen_ = false;
+        return;
+    }
+    chapterIndex_ = std::clamp(chapterIndex_, 0, chapterCount_ - 1);
+}
+
+int MainMenu::ChapterScroll(int visibleRows) const {
+    const int visible = std::max(visibleRows, 1);
+    if (chapterIndex_ < visible) {
+        return 0;
+    }
+    return chapterIndex_ - visible + 1;
+}
+
+void MainMenu::MoveChapter(int delta) {
+    if (chapterCount_ <= 0 || delta == 0) {
+        return;
+    }
+    const int previous = chapterIndex_;
+    chapterIndex_ = (chapterIndex_ + delta + chapterCount_) % chapterCount_;
+    if (chapterIndex_ != previous && sound_ != nullptr) {
+        sound_->PlayHover();
+        sound_->PlayRaw("ui/buttonrollover.wav");
+    }
+}
+
+void MainMenu::AdjustDifficulty(int direction) {
+    if (direction == 0) {
+        return;
+    }
+    const int previous = difficultyIndex_;
+    difficultyIndex_ = (difficultyIndex_ + direction + kDifficultyCount) % kDifficultyCount;
+    if (difficultyIndex_ != previous && sound_ != nullptr) {
+        sound_->PlayHover();
+        sound_->PlayRaw("ui/buttonrollover.wav");
+    }
+}
+
+MenuAction MainMenu::StartHighlightedChapter() {
+    if (chapterCount_ <= 0) {
+        return MenuAction::None;
+    }
+    if (sound_ != nullptr) {
+        sound_->PlaySelect();
+        sound_->PlayRaw("ui/buttonclick.wav");
+    }
+    chapterSelectOpen_ = false;
+    return MenuAction::StartChapter;
 }
 
 void MainMenu::MoveOptionsField(int delta) {
@@ -128,6 +188,11 @@ MenuAction MainMenu::ActivateItem(MainMenuItem item) {
 
     switch (item) {
     case MainMenuItem::NewGame:
+        if (chapterCount_ > 0) {
+            chapterSelectOpen_ = true;
+            chapterIndex_ = std::clamp(chapterIndex_, 0, chapterCount_ - 1);
+            return MenuAction::None;
+        }
         return MenuAction::NewGame;
     case MainMenuItem::LoadGame:
         return MenuAction::LoadGame;
@@ -143,16 +208,61 @@ MenuAction MainMenu::ActivateItem(MainMenuItem item) {
     }
 }
 
+void MainMenu::UpdateChapterHover(const MenuInput& input) {
+    hoverChapter_ = -1;
+    hoverDifficulty_ = -1;
+    if (!input.mouseValid) {
+        return;
+    }
+
+    const int visible = VisibleChapterRows(input.displaySize.y);
+    const int scroll = ChapterScroll(visible);
+    for (int row = 0; row < visible; ++row) {
+        const int index = scroll + row;
+        if (index >= chapterCount_) {
+            break;
+        }
+        const float y0 = kChapterListTop + static_cast<float>(row) * kChapterLineHeight;
+        const float y1 = y0 + kChapterLineHeight;
+        if (input.mousePosition.x >= kChapterListLeft
+            && input.mousePosition.x <= kChapterListLeft + kChapterHitWidth
+            && input.mousePosition.y >= y0
+            && input.mousePosition.y <= y1) {
+            hoverChapter_ = index;
+            break;
+        }
+    }
+
+    if (input.mousePosition.y >= kChapterDifficultyY
+        && input.mousePosition.y <= kChapterDifficultyY + 32.0F) {
+        for (int index = 0; index < kDifficultyCount; ++index) {
+            const float x0 = kChapterPreviewX + static_cast<float>(index) * kChapterDifficultyGap;
+            if (input.mousePosition.x >= x0 && input.mousePosition.x <= x0 + 110.0F) {
+                hoverDifficulty_ = index;
+                break;
+            }
+        }
+    }
+
+    if (hoverChapter_ >= 0 && hoverChapter_ != chapterIndex_) {
+        chapterIndex_ = hoverChapter_;
+        if (sound_ != nullptr) {
+            sound_->PlayHover();
+            sound_->PlayRaw("ui/buttonrollover.wav");
+        }
+    }
+}
+
 void MainMenu::UpdateHoverFromMouse(const MenuInput& input) {
-    if (!input.mouseValid || optionsOpen_) {
+    if (!input.mouseValid || optionsOpen_ || chapterSelectOpen_) {
         lastHoveredIndex_ = -1;
         return;
     }
 
-    const float left = 72.0F;
-    const float top = 220.0F;
-    const float lineHeight = 44.0F;
-    const float hitWidth = 420.0F;
+    const float left = kMainMenuLeft;
+    const float top = kMainMenuTop;
+    const float lineHeight = kMainMenuLineHeight;
+    const float hitWidth = kMainMenuHitWidth;
 
     int hoverIndex = -1;
     for (int i = 0; i < kItemCount; ++i) {
@@ -177,6 +287,51 @@ void MainMenu::UpdateHoverFromMouse(const MenuInput& input) {
 
 MenuAction MainMenu::HandleInput(const MenuInput& input) {
     const bool confirmPressed = input.confirmPressed && confirmCooldown_ <= 0.0F;
+
+    if (chapterSelectOpen_) {
+        UpdateChapterHover(input);
+        if (input.backPressed) {
+            chapterSelectOpen_ = false;
+            if (sound_ != nullptr) {
+                sound_->PlayCancel();
+            }
+            ArmConfirmCooldown();
+            return MenuAction::None;
+        }
+        if (input.upPressed) {
+            MoveChapter(-1);
+        }
+        if (input.downPressed) {
+            MoveChapter(1);
+        }
+        if (input.leftPressed) {
+            AdjustDifficulty(-1);
+        }
+        if (input.rightPressed) {
+            AdjustDifficulty(1);
+        }
+        if (confirmPressed) {
+            ArmConfirmCooldown();
+            return StartHighlightedChapter();
+        }
+        if (input.mouseLeftPressed && confirmCooldown_ <= 0.0F) {
+            if (hoverDifficulty_ >= 0) {
+                if (hoverDifficulty_ != difficultyIndex_ && sound_ != nullptr) {
+                    sound_->PlayHover();
+                    sound_->PlayRaw("ui/buttonrollover.wav");
+                }
+                difficultyIndex_ = hoverDifficulty_;
+                ArmConfirmCooldown();
+                return MenuAction::None;
+            }
+            if (hoverChapter_ >= 0) {
+                chapterIndex_ = hoverChapter_;
+                ArmConfirmCooldown();
+                return StartHighlightedChapter();
+            }
+        }
+        return MenuAction::None;
+    }
 
     if (optionsOpen_) {
         if (input.backPressed) {

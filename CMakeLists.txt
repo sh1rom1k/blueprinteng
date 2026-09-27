@@ -99,17 +99,26 @@ add_executable(
     src/Shader.cpp
     src/bsp_loader.cpp
     src/vtf_loader.cpp
+    src/VpkArchive.cpp
+    src/GameFileSystem.cpp
+    src/StudioModel.cpp
+    src/AiNavigation.cpp
+    src/NpcSpeech.cpp
+    src/GameSimulation.cpp
     src/PlayerController.cpp
     src/PhysicsWorld.cpp
     src/ShadowManager.cpp
     src/AudioSystem.cpp
     src/ui/MainMenu.cpp
     src/ui/MenuRenderer.cpp
+    src/ui/ChapterCatalog.cpp
     src/ui/OpenGLUIRenderBackend.cpp
     src/ui/VguiPauseMenu.cpp
     src/ui/ValveNetGraph.cpp
     src/ui/EntityLabelRenderer.cpp
     src/ui/WavUISoundBackend.cpp
+    src/ui/LoadingScreen.cpp
+    src/ui/MenuBackground.cpp
 )
 target_include_directories(
     blueprinteng

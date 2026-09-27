@@ -4,3 +4,6 @@ build/
 # Local game archives. These are large and are not part of the engine source.
 textures/*.vpk
 textures/*.sound.cache
+
+# Installed game content. Keep this out of the repo.
+/game/

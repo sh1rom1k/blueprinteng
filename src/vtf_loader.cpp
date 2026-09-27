@@ -1,11 +1,12 @@
 #include "VtfTexture.hpp"
 
+#include "VpkArchive.hpp"
+
 #include <algorithm>
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
-#include <cctype>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -25,6 +26,7 @@ constexpr std::size_t kLowResHeightOffset = 62;
 constexpr std::size_t kMinimumHeaderSize = 63;
 
 constexpr std::uint32_t kFormatRgba8888 = 0;
+constexpr std::uint32_t kFormatBgr888 = 3;
 constexpr std::uint32_t kFormatBgra8888 = 12;
 constexpr std::uint32_t kFormatDxt1 = 13;
 constexpr std::uint32_t kFormatDxt3 = 14;
@@ -80,35 +82,12 @@ std::vector<std::uint8_t> ReadFile(const std::string& path) {
     return data;
 }
 
-std::vector<std::uint8_t> ReadFileRange(const std::string& path, std::size_t offset, std::size_t length) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        Fail("unable to open '" + path + "'");
-    }
-    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!file) {
-        Fail("invalid data offset in '" + path + "'");
-    }
-    std::vector<std::uint8_t> data(length);
-    if (!data.empty() && !file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(length))) {
-        Fail("unable to read VPK data from '" + path + "'");
-    }
-    return data;
-}
-
-const std::vector<std::uint8_t>& ReadCachedFile(const std::string& path) {
-    static std::unordered_map<std::string, std::vector<std::uint8_t>> cache;
-    const auto cached = cache.find(path);
-    if (cached != cache.end()) {
-        return cached->second;
-    }
-    return cache.emplace(path, ReadFile(path)).first->second;
-}
-
 TextureFormat GetFormat(std::uint32_t format) {
     switch (format) {
     case kFormatRgba8888:
         return {false, 4, GL_RGBA, GL_RGBA8};
+    case kFormatBgr888:
+        return {false, 3, GL_RGB, GL_RGB8};
     case kFormatBgra8888:
         return {false, 4, GL_BGRA, GL_RGBA8};
     case kFormatDxt1:
@@ -152,153 +131,6 @@ std::size_t CheckedOffset(std::size_t offset, std::size_t amount, std::size_t fi
     }
     return offset + amount;
 }
-
-std::uint16_t ReadU16Raw(const std::vector<std::uint8_t>& data, std::size_t& cursor) {
-    const std::uint16_t value = static_cast<std::uint16_t>(data.at(cursor))
-        | (static_cast<std::uint16_t>(data.at(cursor + 1)) << 8U);
-    cursor += 2;
-    return value;
-}
-
-std::uint32_t ReadU32Raw(const std::vector<std::uint8_t>& data, std::size_t& cursor) {
-    const std::uint32_t value = static_cast<std::uint32_t>(data.at(cursor))
-        | (static_cast<std::uint32_t>(data.at(cursor + 1)) << 8U)
-        | (static_cast<std::uint32_t>(data.at(cursor + 2)) << 16U)
-        | (static_cast<std::uint32_t>(data.at(cursor + 3)) << 24U);
-    cursor += 4;
-    return value;
-}
-
-std::string ReadCString(const std::vector<std::uint8_t>& data, std::size_t& cursor, std::size_t end) {
-    const std::size_t start = cursor;
-    while (cursor < end && data[cursor] != 0) {
-        ++cursor;
-    }
-    if (cursor >= end) {
-        Fail("truncated VPK directory tree");
-    }
-    const std::string value(reinterpret_cast<const char*>(data.data() + start), cursor - start);
-    ++cursor;
-    return value;
-}
-
-std::string Lowercase(std::string value) {
-    for (char& character : value) {
-        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-    }
-    return value;
-}
-
-struct VpkLocation {
-    std::uint16_t archiveIndex = 0;
-    std::uint32_t offset = 0;
-    std::uint32_t length = 0;
-    std::vector<std::uint8_t> preload;
-};
-
-using VpkIndex = std::unordered_map<std::string, VpkLocation>;
-
-VpkIndex BuildVpkIndex(const std::vector<std::uint8_t>& directory) {
-    if (directory.size() < 12 || ReadU32(directory, 0) != 0x55AA1234) {
-        Fail("invalid VPK archive");
-    }
-    const std::uint32_t version = ReadU32(directory, 4);
-    const std::uint32_t treeSize = ReadU32(directory, 8);
-    const std::size_t headerSize = version == 1 ? 12 : 28;
-    if ((version != 1 && version != 2) || headerSize + treeSize > directory.size()) {
-        Fail("unsupported or truncated VPK header");
-    }
-
-    VpkIndex index;
-    std::size_t cursor = headerSize;
-    const std::size_t treeEnd = headerSize + treeSize;
-    while (cursor < treeEnd) {
-        const std::string extension = ReadCString(directory, cursor, treeEnd);
-        if (extension.empty()) {
-            break;
-        }
-        while (cursor < treeEnd) {
-            const std::string path = ReadCString(directory, cursor, treeEnd);
-            if (path.empty()) {
-                break;
-            }
-            while (cursor < treeEnd) {
-                const std::string filename = ReadCString(directory, cursor, treeEnd);
-                if (filename.empty()) {
-                    break;
-                }
-                if (cursor + 18 > treeEnd) {
-                    Fail("truncated VPK entry");
-                }
-                static_cast<void>(ReadU32Raw(directory, cursor));
-                const std::uint16_t preloadSize = ReadU16Raw(directory, cursor);
-                const std::uint16_t archiveIndex = ReadU16Raw(directory, cursor);
-                const std::uint32_t entryOffset = ReadU32Raw(directory, cursor);
-                const std::uint32_t entryLength = ReadU32Raw(directory, cursor);
-                if (ReadU16Raw(directory, cursor) != 0xFFFF) {
-                    Fail("invalid VPK entry terminator");
-                }
-                const std::string entryPath = Lowercase(
-                    path == " " ? filename + "." + extension : path + "/" + filename + "." + extension
-                );
-                const std::size_t preloadOffset = cursor;
-                cursor = CheckedOffset(cursor, preloadSize, treeEnd);
-                VpkLocation location;
-                location.archiveIndex = archiveIndex;
-                location.offset = entryOffset;
-                location.length = entryLength;
-                location.preload.assign(
-                    directory.begin() + static_cast<std::ptrdiff_t>(preloadOffset),
-                    directory.begin() + static_cast<std::ptrdiff_t>(preloadOffset + preloadSize)
-                );
-                index.emplace(entryPath, std::move(location));
-            }
-        }
-    }
-    return index;
-}
-
-std::vector<std::uint8_t> ReadVpkEntry(const std::string& vpkPath, const std::string& requestedPath) {
-    static std::unordered_map<std::string, VpkIndex> indexCache;
-    auto cachedIndex = indexCache.find(vpkPath);
-    if (cachedIndex == indexCache.end()) {
-        cachedIndex = indexCache.emplace(vpkPath, BuildVpkIndex(ReadCachedFile(vpkPath))).first;
-    }
-    const auto entry = cachedIndex->second.find(Lowercase(requestedPath));
-    if (entry == cachedIndex->second.end()) {
-        Fail("texture '" + requestedPath + "' was not found in VPK");
-    }
-
-    const VpkLocation& location = entry->second;
-    std::vector<std::uint8_t> result = location.preload;
-    if (location.archiveIndex == 0x7FFF) {
-        const std::vector<std::uint8_t>& directory = ReadCachedFile(vpkPath);
-        const std::uint32_t treeSize = ReadU32(directory, 8);
-        const std::size_t headerSize = ReadU32(directory, 4) == 1 ? 12 : 28;
-        const std::size_t dataOffset = CheckedOffset(headerSize + treeSize, location.offset, directory.size());
-        CheckedOffset(dataOffset, location.length, directory.size());
-        result.insert(result.end(), directory.begin() + static_cast<std::ptrdiff_t>(dataOffset),
-            directory.begin() + static_cast<std::ptrdiff_t>(dataOffset + location.length));
-    } else {
-        std::filesystem::path archivePath(vpkPath);
-        const std::string filenameWithoutDir = archivePath.filename().string();
-        const std::string suffix = "_dir.vpk";
-        if (filenameWithoutDir.size() <= suffix.size()
-            || filenameWithoutDir.substr(filenameWithoutDir.size() - suffix.size()) != suffix) {
-            Fail("VPK archive is not a directory archive");
-        }
-        archivePath.replace_filename(
-            filenameWithoutDir.substr(0, filenameWithoutDir.size() - suffix.size())
-            + "_" + (location.archiveIndex < 10 ? "00" : location.archiveIndex < 100 ? "0" : "")
-            + std::to_string(location.archiveIndex) + ".vpk"
-        );
-        const std::vector<std::uint8_t> archiveData = ReadFileRange(
-            archivePath.string(), location.offset, location.length
-        );
-        result.insert(result.end(), archiveData.begin(), archiveData.end());
-    }
-    return result;
-}
 }
 
 namespace vtf {
@@ -314,7 +146,7 @@ GLuint LoadVtfTextureData(const std::vector<std::uint8_t>& data, const std::stri
     const std::uint32_t versionMajor = ReadU32(data, 4);
     const std::uint32_t versionMinor = ReadU32(data, 8);
     const std::uint32_t headerSize = ReadU32(data, 12);
-    if (versionMajor != 7 || versionMinor < 1 || versionMinor > 2) {
+    if (versionMajor != 7 || versionMinor > 5) {
         Fail("unsupported VTF version " + std::to_string(versionMajor) + "." + std::to_string(versionMinor));
     }
     if (headerSize < kMinimumHeaderSize || headerSize > data.size()) {
@@ -364,6 +196,16 @@ GLuint LoadVtfTextureData(const std::vector<std::uint8_t>& data, const std::stri
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
     const void* pixels = data.data() + highResOffset;
+    std::vector<std::uint8_t> swapped;
+    if (highResFormat == kFormatBgr888) {
+        swapped.resize(imageSize);
+        for (std::size_t index = 0; index + 2 < imageSize; index += 3) {
+            swapped[index] = data[highResOffset + index + 2];
+            swapped[index + 1] = data[highResOffset + index + 1];
+            swapped[index + 2] = data[highResOffset + index];
+        }
+        pixels = swapped.data();
+    }
     if (textureFormat.compressed) {
         glCompressedTexImage2D(
             GL_TEXTURE_2D,
@@ -393,12 +235,132 @@ GLuint LoadVtfTextureData(const std::vector<std::uint8_t>& data, const std::stri
     return textureID;
 }
 
+GLuint LoadVtfCubemapData(const std::vector<std::uint8_t>& data, const std::string& source) {
+    if (data.size() < kMinimumHeaderSize) {
+        Fail("file is smaller than a VTF header");
+    }
+    if (ReadU32(data, 0) != kVtfSignature) {
+        Fail("invalid signature in " + source + ", expected VTF\\0");
+    }
+
+    const std::uint32_t versionMajor = ReadU32(data, 4);
+    const std::uint32_t versionMinor = ReadU32(data, 8);
+    const std::uint32_t headerSize = ReadU32(data, 12);
+    if (versionMajor != 7 || versionMinor > 5) {
+        Fail("unsupported VTF version " + std::to_string(versionMajor) + "." + std::to_string(versionMinor));
+    }
+    if (headerSize < kMinimumHeaderSize || headerSize > data.size()) {
+        Fail("invalid header size");
+    }
+
+    const std::uint32_t width = ReadU16(data, 16);
+    const std::uint32_t height = ReadU16(data, 18);
+    const std::uint32_t flags = ReadU32(data, 20);
+    const std::uint32_t frames = std::max<std::uint16_t>(1, ReadU16(data, 24));
+    const std::uint32_t highResFormat = ReadU32(data, kHighResFormatOffset);
+    const std::uint32_t lowResFormat = ReadU32(data, kLowResFormatOffset);
+    const std::uint32_t lowResWidth = data[kLowResWidthOffset];
+    const std::uint32_t lowResHeight = data[kLowResHeightOffset];
+    const std::uint32_t mipmapCount = std::max<std::uint8_t>(1, data[kMipmapCountOffset]);
+    if ((flags & kEnvMapFlag) == 0 || width == 0 || height == 0) {
+        Fail("cubemap flag is missing in " + source);
+    }
+
+    const std::size_t lowResSize = ImageSize(lowResFormat, lowResWidth, lowResHeight);
+    std::size_t highResOffset = CheckedOffset(headerSize, lowResSize, data.size());
+    const std::uint32_t storedFaces = versionMinor < 5 ? 7U : 6U;
+    const TextureFormat textureFormat = GetFormat(highResFormat);
+    for (std::uint32_t mip = mipmapCount - 1; mip > 0; --mip) {
+        const std::uint32_t mipWidth = std::max<std::uint32_t>(1, width >> mip);
+        const std::uint32_t mipHeight = std::max<std::uint32_t>(1, height >> mip);
+        const std::size_t mipSize = ImageSize(highResFormat, mipWidth, mipHeight);
+        const std::uintmax_t images = static_cast<std::uintmax_t>(frames) * storedFaces;
+        const std::uintmax_t skip = static_cast<std::uintmax_t>(mipSize) * images;
+        if (skip > std::numeric_limits<std::size_t>::max()) {
+            Fail("mipmap data is too large");
+        }
+        highResOffset = CheckedOffset(highResOffset, static_cast<std::size_t>(skip), data.size());
+    }
+
+    const std::size_t imageSize = ImageSize(highResFormat, width, height);
+    CheckedOffset(highResOffset, imageSize * 6U, data.size());
+
+    static const GLenum kFaces[6] = {
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+    };
+
+    GLuint textureID = 0;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+    for (int face = 0; face < 6; ++face) {
+        const std::size_t faceOffset = highResOffset + imageSize * static_cast<std::size_t>(face);
+        const void* pixels = data.data() + faceOffset;
+        std::vector<std::uint8_t> swapped;
+        if (highResFormat == kFormatBgr888) {
+            swapped.resize(imageSize);
+            for (std::size_t index = 0; index + 2 < imageSize; index += 3) {
+                swapped[index] = data[faceOffset + index + 2];
+                swapped[index + 1] = data[faceOffset + index + 1];
+                swapped[index + 2] = data[faceOffset + index];
+            }
+            pixels = swapped.data();
+        }
+        if (textureFormat.compressed) {
+            glCompressedTexImage2D(
+                kFaces[face],
+                0,
+                textureFormat.internalFormat,
+                static_cast<GLsizei>(width),
+                static_cast<GLsizei>(height),
+                0,
+                static_cast<GLsizei>(imageSize),
+                pixels
+            );
+        } else {
+            glTexImage2D(
+                kFaces[face],
+                0,
+                textureFormat.internalFormat,
+                static_cast<GLsizei>(width),
+                static_cast<GLsizei>(height),
+                0,
+                textureFormat.externalFormat,
+                GL_UNSIGNED_BYTE,
+                pixels
+            );
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    return textureID;
+}
+
 GLuint LoadVtfTexture(const std::string& path) {
     return LoadVtfTextureData(ReadFile(path), path);
 }
 
 GLuint LoadVtfTextureFromVpk(const std::string& vpkPath, const std::string& internalPath) {
-    return LoadVtfTextureData(ReadVpkEntry(vpkPath, internalPath), vpkPath + ":" + internalPath);
+    static std::unordered_map<std::string, std::unique_ptr<VpkArchive>> archives;
+    auto found = archives.find(vpkPath);
+    if (found == archives.end()) {
+        found = archives.emplace(vpkPath, std::make_unique<VpkArchive>(vpkPath)).first;
+    }
+    std::vector<std::uint8_t> bytes;
+    if (!found->second->Read(internalPath, bytes)) {
+        Fail("texture '" + internalPath + "' was not found in VPK");
+    }
+    return LoadVtfTextureData(bytes, vpkPath + ":" + internalPath);
 }
 
 GLuint LoadRasterTexture(const std::string& path) {
@@ -422,6 +384,33 @@ GLuint LoadRasterTexture(const std::string& path) {
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);
     stbi_image_free(pixels);
+    return textureID;
+}
+
+GLuint CreateMissingTexture() {
+    constexpr int kSize = 64;
+    constexpr int kSquare = 8;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kSize * kSize * 4));
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            const bool purple = ((x / kSquare) + (y / kSquare)) % 2 == 0;
+            const std::size_t index = static_cast<std::size_t>((y * kSize + x) * 4);
+            pixels[index] = purple ? 255 : 0;
+            pixels[index + 1] = 0;
+            pixels[index + 2] = purple ? 255 : 0;
+            pixels[index + 3] = 255;
+        }
+    }
+
+    GLuint textureID = 0;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
     return textureID;
 }
 

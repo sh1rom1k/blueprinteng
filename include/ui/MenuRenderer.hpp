@@ -1,15 +1,17 @@
 #pragma once
 
+#include "ui/ChapterCatalog.hpp"
 #include "ui/IUIRenderBackend.hpp"
 #include "ui/MainMenu.hpp"
 
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace ui {
 
 struct MenuBackgroundLayer {
-    float overlayAlpha = 0.35F;
+    float overlayAlpha = 0.0F;
     bool drawVignette = true;
 };
 
@@ -20,6 +22,8 @@ public:
         const MainMenu& menu,
         float timeSeconds,
         std::span<const std::string> mapLabels,
+        std::string_view gameLabel,
+        std::span<const ChapterInfo> chapters,
         const MenuBackgroundLayer& background = {}
     ) const;
 
@@ -37,6 +41,13 @@ private:
         const MainMenu& menu,
         float timeSeconds,
         std::span<const std::string> mapLabels
+    ) const;
+
+    void RenderChapterSelect(
+        IUIRenderBackend& backend,
+        const MainMenu& menu,
+        float timeSeconds,
+        std::span<const ChapterInfo> chapters
     ) const;
 };
 

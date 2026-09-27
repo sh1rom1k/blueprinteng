@@ -1,3 +1,5 @@
+#include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <algorithm>
 #include <filesystem>
@@ -5,10 +7,17 @@
 #include <iostream>
 #include <memory>
 #include <cmath>
+#include <random>
 #include <string>
+#include <system_error>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #if defined(__linux__)
 #include <unistd.h>
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 #include <glad/gl.h>
@@ -18,19 +27,25 @@
 
 #include "AudioSystem.hpp"
 #include "BspLoader.hpp"
+#include "GameFileSystem.hpp"
+#include "GameSimulation.hpp"
 #include "Mesh.hpp"
 #include "PhysicsWorld.hpp"
 #include "PlayerController.hpp"
 #include "Shader.hpp"
+#include "SourceCoords.hpp"
 #include "ShadowManager.hpp"
+#include "ui/ChapterCatalog.hpp"
 #include "ui/IUIRenderBackend.hpp"
 #include "ui/IUISoundBackend.hpp"
 #include "ui/MainMenu.hpp"
+#include "ui/MenuBackground.hpp"
 #include "ui/MenuRenderer.hpp"
 #include "ui/OpenGLUIRenderBackend.hpp"
 #include "ui/VguiPauseMenu.hpp"
 #include "ui/ValveNetGraph.hpp"
 #include "ui/EntityLabelRenderer.hpp"
+#include "ui/LoadingScreen.hpp"
 #include "ui/WavUISoundBackend.hpp"
 
 namespace {
@@ -62,6 +77,7 @@ struct WindowState {
     bool fullscreen = false;
     bool f11WasPressed = false;
     bool f12WasPressed = false;
+    bool f2WasPressed = false;
     bool f3WasPressed = false;
     bool escapeWasPressed = false;
     bool vWasPressed = false;
@@ -99,6 +115,178 @@ struct SpotLight {
 };
 
 constexpr std::size_t kMaxPointLights = 32;
+constexpr int kMaxMapPointLights = 24;
+constexpr int kMaxMapSpots = 8;
+
+PointLight ToPointLight(const BspMapLight& light) {
+    PointLight point;
+    point.position = light.position;
+    point.color = light.color;
+    point.intensity = light.intensity;
+    point.constant = light.constant;
+    point.linear = light.linear;
+    point.quadratic = light.quadratic;
+    return point;
+}
+
+std::vector<PointLight> SelectFramePointLights(
+    const BspLoader* map,
+    const std::vector<PointLight>& playerLights,
+    const glm::vec3& camera
+) {
+    std::vector<PointLight> selected;
+    if (map != nullptr) {
+        std::vector<const BspMapLight*> points;
+        for (const BspMapLight& light : map->MapLights()) {
+            if (light.kind == BspLightKind::Point && light.intensity > 0.001F) {
+                points.push_back(&light);
+            }
+        }
+        std::sort(points.begin(), points.end(), [&camera](const BspMapLight* a, const BspMapLight* b) {
+            const glm::vec3 da = a->position - camera;
+            const glm::vec3 db = b->position - camera;
+            return glm::dot(da, da) < glm::dot(db, db);
+        });
+        const std::size_t count = std::min(points.size(), static_cast<std::size_t>(kMaxMapPointLights));
+        selected.reserve(count + playerLights.size());
+        for (std::size_t index = 0; index < count; ++index) {
+            selected.push_back(ToPointLight(*points[index]));
+        }
+    }
+    for (const PointLight& light : playerLights) {
+        if (selected.size() >= kMaxPointLights) {
+            break;
+        }
+        selected.push_back(light);
+    }
+    return selected;
+}
+
+void UploadMapSpotsAndSun(const Shader& shader, const BspLoader* map, const glm::vec3& camera) {
+    if (map == nullptr) {
+        shader.SetInt("NumMapSpots", 0);
+        shader.SetSunUniform(glm::vec3(0.0F, 1.0F, 0.0F), glm::vec3(1.0F), 0.0F, glm::vec3(0.0F));
+        return;
+    }
+    std::vector<const BspMapLight*> spots;
+    for (const BspMapLight& light : map->MapLights()) {
+        if (light.kind == BspLightKind::Spot && light.intensity > 0.001F) {
+            spots.push_back(&light);
+        }
+    }
+    std::sort(spots.begin(), spots.end(), [&camera](const BspMapLight* a, const BspMapLight* b) {
+        const glm::vec3 da = a->position - camera;
+        const glm::vec3 db = b->position - camera;
+        return glm::dot(da, da) < glm::dot(db, db);
+    });
+    const int count = static_cast<int>(std::min(spots.size(), static_cast<std::size_t>(kMaxMapSpots)));
+    shader.SetInt("NumMapSpots", count);
+    for (int index = 0; index < count; ++index) {
+        const BspMapLight& light = *spots[static_cast<std::size_t>(index)];
+        shader.SetMapSpotUniform(
+            index,
+            light.position,
+            light.direction,
+            light.color,
+            light.intensity,
+            light.innerCutOff,
+            light.outerCutOff,
+            light.constant,
+            light.linear,
+            light.quadratic,
+            true
+        );
+    }
+    if (map->HasEnvironmentLight()) {
+        const BspMapLight& sun = map->EnvironmentLight();
+        shader.SetSunUniform(sun.direction, sun.color, sun.intensity, sun.ambient);
+    } else {
+        shader.SetSunUniform(glm::vec3(0.0F, 1.0F, 0.0F), glm::vec3(1.0F), 0.0F, glm::vec3(0.0F));
+    }
+}
+
+std::vector<float> WithStyleChannel(const std::vector<float>& source) {
+    std::vector<float> vertices;
+    vertices.reserve((source.size() / 10U) * Mesh::kFloatsPerVertex);
+    for (std::size_t index = 0; index + 9 < source.size(); index += 10) {
+        vertices.insert(
+            vertices.end(),
+            source.begin() + static_cast<std::ptrdiff_t>(index),
+            source.begin() + static_cast<std::ptrdiff_t>(index + 10)
+        );
+        vertices.push_back(0.0F);
+    }
+    return vertices;
+}
+
+void UploadFog(const Shader& shader, const BspFog& fog, const glm::vec3& camera) {
+    shader.SetBool("FogEnabled", fog.enabled);
+    shader.SetVec3("FogColor", fog.color);
+    shader.SetFloat("FogStart", fog.start);
+    shader.SetFloat("FogEnd", fog.end);
+    shader.SetFloat("FogMaxDensity", fog.maxDensity);
+    shader.SetVec3("CameraPos", camera);
+}
+
+void UploadLightStyles(const Shader& shader, const BspLoader* map, float timeSeconds) {
+    float values[64];
+    if (map != nullptr) {
+        map->FillLightStyles(timeSeconds, values);
+    } else {
+        for (float& value : values) {
+            value = 1.0F;
+        }
+    }
+    shader.SetFloatArray("LightStyleValues", values, 64);
+}
+
+void DrawSkyPasses(
+    const Shader& worldShader,
+    const Shader& skyShader,
+    BspLoader& map,
+    GameSimulation* simulation,
+    const glm::mat4& view,
+    const glm::mat4& projection,
+    float fovRadians,
+    float aspect,
+    const glm::vec3& cameraPosition,
+    const glm::vec3& cameraFront,
+    const glm::vec3& cameraUp,
+    float timeSeconds
+) {
+    UploadLightStyles(worldShader, &map, timeSeconds);
+    if (map.HasSkybox()) {
+        const glm::mat4 skyView{glm::mat3(view)};
+        skyShader.Use();
+        skyShader.SetMat4("View", skyView);
+        skyShader.SetMat4("Projection", projection);
+        map.DrawSkybox(skyShader);
+        worldShader.Use();
+    }
+    if (map.HasSkyCamera()) {
+        const glm::vec3 skyOrigin = map.SkyViewOrigin(cameraPosition);
+        const glm::mat4 skyView = glm::lookAt(skyOrigin, skyOrigin + cameraFront, cameraUp);
+        const float skyFar = 28400.0F * kSourceToWorld;
+        const glm::mat4 skyProjection = glm::perspective(fovRadians, std::max(aspect, 0.001F), 0.005F, skyFar);
+        worldShader.SetMat4("View", skyView);
+        worldShader.SetMat4("Projection", skyProjection);
+        worldShader.SetMat4("Model", glm::mat4(1.0F));
+        UploadFog(worldShader, map.SkyCamera().fog, skyOrigin);
+        map.DrawSky(worldShader, skyProjection * skyView);
+        if (simulation != nullptr) {
+            simulation->DrawSky(worldShader);
+            simulation->DrawSkyTransparent(worldShader);
+        }
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+        glClear(GL_DEPTH_BUFFER_BIT);
+    }
+    worldShader.SetMat4("Model", glm::mat4(1.0F));
+    worldShader.SetMat4("View", view);
+    worldShader.SetMat4("Projection", projection);
+    UploadFog(worldShader, map.WorldFog(), cameraPosition);
+}
 
 // Query current process Resident Set Size (RSS) in Megabytes on Linux
 float GetProcessRamUsageMb() {
@@ -286,6 +474,70 @@ ui::MenuInput BuildMenuInput(GLFWwindow* window, MenuKeyState& keys, ui::IUIRend
     return input;
 }
 
+class DebugTriangleMesh {
+public:
+    DebugTriangleMesh(const std::vector<glm::vec3>& vertices, const std::vector<std::uint32_t>& indices)
+        : indexCount_(static_cast<GLsizei>(indices.size())) {
+        glGenVertexArrays(1, &vao_);
+        glGenBuffers(1, &vbo_);
+        glGenBuffers(1, &ebo_);
+        glBindVertexArray(vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(vertices.size() * sizeof(glm::vec3)),
+            vertices.data(),
+            GL_STATIC_DRAW
+        );
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+        glBufferData(
+            GL_ELEMENT_ARRAY_BUFFER,
+            static_cast<GLsizeiptr>(indices.size() * sizeof(std::uint32_t)),
+            indices.data(),
+            GL_STATIC_DRAW
+        );
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+    }
+
+    ~DebugTriangleMesh() {
+        glDeleteBuffers(1, &ebo_);
+        glDeleteBuffers(1, &vbo_);
+        glDeleteVertexArrays(1, &vao_);
+    }
+
+    DebugTriangleMesh(const DebugTriangleMesh&) = delete;
+    DebugTriangleMesh& operator=(const DebugTriangleMesh&) = delete;
+
+    void Draw() const {
+        glBindVertexArray(vao_);
+        glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
+    }
+
+private:
+    GLuint vao_ = 0;
+    GLuint vbo_ = 0;
+    GLuint ebo_ = 0;
+    GLsizei indexCount_ = 0;
+};
+
+void DrawBlueWireframe(
+    const Shader& shader,
+    const DebugTriangleMesh& mesh,
+    const glm::mat4& model,
+    const glm::mat4& view,
+    const glm::mat4& projection
+) {
+    shader.Use();
+    shader.SetMat4("Model", model);
+    shader.SetMat4("View", view);
+    shader.SetMat4("Projection", projection);
+    shader.SetVec3("Color", glm::vec3(0.15F, 0.45F, 1.0F));
+    mesh.Draw();
+}
+
 void SetMouseCaptured(GLFWwindow* window, Camera& camera, bool captured) {
     camera.mouseCaptured = captured;
     camera.firstMouse = true;
@@ -301,7 +553,8 @@ void ProcessInput(
     const glm::vec3& playerPos,
     PhysicsWorld& physicsWorld,
     bool& showDebugOverlay,
-    bool& showEntitySpawnLabels
+    bool& showEntitySpawnLabels,
+    bool& showCollisionMesh
 ) {
     const bool f12Pressed = glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS;
     if (f12Pressed && !state.f12WasPressed) {
@@ -320,6 +573,12 @@ void ProcessInput(
         state.noclip = !state.noclip;
     }
     state.vWasPressed = vPressed;
+
+    const bool f2Pressed = glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS;
+    if (f2Pressed && !state.f2WasPressed) {
+        showCollisionMesh = !showCollisionMesh;
+    }
+    state.f2WasPressed = f2Pressed;
 
     const bool f3Pressed = glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS;
     if (f3Pressed && !state.f3WasPressed) {
@@ -365,6 +624,51 @@ void ProcessInput(
         physicsWorld.SpawnDynamicBox(spawnPosition, throwVelocity);
     }
     state.hWasPressed = hPressed;
+}
+
+struct LaunchOptions {
+    std::string game = "hl2";
+    bool autoStart = false;
+    std::filesystem::path mapPath;
+};
+
+LaunchOptions ParseLaunchOptions(int argc, char* argv[]) {
+    LaunchOptions options;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "-game" || argument == "--game") {
+            if (index + 1 < argc) {
+                options.game = argv[++index];
+            }
+        } else if (argument == "--autostart") {
+            options.autoStart = true;
+        } else if (argument == "+map") {
+            if (index + 1 < argc) {
+                options.mapPath = argv[++index];
+            }
+        } else if (options.mapPath.empty() && !argument.empty() && argument[0] != '-' && argument[0] != '+') {
+            options.mapPath = argument;
+        }
+    }
+    return options;
+}
+
+std::filesystem::path ExecutableDirectory() {
+#if defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length > 0 && length < buffer.size()) {
+        buffer.resize(length);
+        return std::filesystem::path(buffer).parent_path();
+    }
+#elif defined(__linux__)
+    std::error_code error;
+    const std::filesystem::path executable = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error) {
+        return executable.parent_path();
+    }
+#endif
+    return std::filesystem::current_path();
 }
 } // namespace
 
@@ -574,27 +878,71 @@ int main(int argc, char* argv[]) {
             std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/basic.frag"
         );
         shader.CacheLightUniformLocations();
+        Shader skyShader(
+            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/skybox.vert",
+            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/skybox.frag"
+        );
+        Shader debugShader(
+            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/debug_color.vert",
+            std::string(BLUEPRINT_SOURCE_DIR) + "/shaders/debug_color.frag"
+        );
 
         ShadowManager shadowManager;
         shadowManager.Init(BLUEPRINT_SOURCE_DIR);
 
+        const LaunchOptions launchOptions = ParseLaunchOptions(argc, argv);
+        auto gameFiles = std::make_unique<GameFileSystem>();
+        const std::filesystem::path gameDirectory = std::filesystem::path(launchOptions.game).is_absolute()
+            ? std::filesystem::path(launchOptions.game)
+            : ExecutableDirectory() / "game" / launchOptions.game;
+        const bool gameMounted = gameFiles->Mount(gameDirectory);
+        if (!gameMounted) {
+            gameFiles.reset();
+        } else {
+            std::cout << "Game: " << launchOptions.game << " (" << gameDirectory << ")\n";
+        }
+
+        const std::string gameLabel = gameFiles != nullptr ? gameFiles->GameLabel() : std::string{};
+        glfwSetWindowTitle(window, gameLabel.empty() ? "BLUEPRINT ENGINE" : gameLabel.c_str());
+        std::vector<ui::ChapterInfo> chapters;
+        if (gameFiles != nullptr) {
+            chapters = ui::LoadChapters(*gameFiles);
+        }
+
         std::vector<std::filesystem::path> mapFiles;
-        const std::filesystem::path mapsDirectory = std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "maps";
-        if (std::filesystem::exists(mapsDirectory)) {
-            for (const auto& entry : std::filesystem::directory_iterator(mapsDirectory)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".bsp") {
-                    mapFiles.push_back(entry.path());
+        std::vector<std::filesystem::path> backgroundMaps;
+        const auto addMapFile = [&](const std::filesystem::path& path) {
+            if (ui::IsBackgroundMapFile(path)) {
+                backgroundMaps.push_back(path);
+            } else {
+                mapFiles.push_back(path);
+            }
+        };
+        if (gameFiles) {
+            for (const std::string& relative : gameFiles->List("maps/", ".bsp")) {
+                addMapFile(relative);
+            }
+        }
+        if (mapFiles.empty() && backgroundMaps.empty()) {
+            const std::filesystem::path mapsDirectory = std::filesystem::path(BLUEPRINT_SOURCE_DIR) / "maps";
+            if (std::filesystem::exists(mapsDirectory)) {
+                for (const auto& entry : std::filesystem::directory_iterator(mapsDirectory)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".bsp") {
+                        addMapFile(entry.path());
+                    }
                 }
             }
         }
         std::sort(mapFiles.begin(), mapFiles.end());
+        std::sort(backgroundMaps.begin(), backgroundMaps.end());
         int selectedMap = 0;
-        const bool autoStart = argc > 2 && std::string(argv[1]) == "--autostart";
-        if (argc > 1) {
-            const char* requestedPath = autoStart ? argv[2] : argv[1];
-            const std::filesystem::path requestedMap = std::filesystem::absolute(requestedPath);
+        const bool autoStart = launchOptions.autoStart;
+        if (!launchOptions.mapPath.empty()) {
+            const std::filesystem::path requestedMap = launchOptions.mapPath;
             for (std::size_t index = 0; index < mapFiles.size(); ++index) {
-                if (std::filesystem::absolute(mapFiles[index]) == requestedMap) {
+                if (mapFiles[index].filename() == requestedMap
+                    || mapFiles[index].stem() == requestedMap
+                    || mapFiles[index] == requestedMap) {
                     selectedMap = static_cast<int>(index);
                     break;
                 }
@@ -602,6 +950,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::unique_ptr<BspLoader> bspMap;
+        std::unique_ptr<GameSimulation> gameSim;
         std::unique_ptr<Mesh> cube;
         std::unique_ptr<Mesh> demoRoom;
         std::unique_ptr<Mesh> propCube;
@@ -615,10 +964,11 @@ int main(int argc, char* argv[]) {
         bool startRequested = autoStart;
         bool mapTestRequested = false;
         bool returnToMenuRequested = false;
+        std::filesystem::path chapterMapPath;
 
         AudioSystem audio;
         const std::filesystem::path contentRoot = BLUEPRINT_SOURCE_DIR;
-        const bool audioReady = audio.Initialize(contentRoot);
+        const bool audioReady = audio.Initialize(contentRoot, gameFiles.get());
         ui::NullUISoundBackend nullMenuSound;
         ui::WavUISoundBackend menuSound(&audio);
         ui::IUISoundBackend* menuSoundBackend = audioReady ? static_cast<ui::IUISoundBackend*>(&menuSound)
@@ -626,14 +976,47 @@ int main(int argc, char* argv[]) {
         ui::MainMenu mainMenu;
         ui::MenuRenderer menuRenderer;
         ui::VguiPauseMenu pauseMenu;
+        ui::LoadingScreen loadingScreen;
         ui::ValveNetGraph netGraph;
         ui::EntityLabelRenderer entityLabelRenderer;
         MenuKeyState menuKeys;
         mainMenu.Initialize(menuSoundBackend);
         pauseMenu.Initialize(menuSoundBackend);
+        mainMenu.SetChapterCount(static_cast<int>(chapters.size()));
         mainMenu.SetMapCount(static_cast<int>(mapFiles.size()) + 1);
         mainMenu.SyncOptionsFromEngine(windowState.fullscreen, camera.sensitivity, selectedMap);
-        std::unique_ptr<Mesh> menuBackdrop = std::make_unique<Mesh>(roomVertices, roomIndices);
+        std::unique_ptr<Mesh> menuBackdrop = std::make_unique<Mesh>(WithStyleChannel(roomVertices), roomIndices);
+        std::unique_ptr<BspLoader> menuMap;
+        std::unique_ptr<PhysicsWorld> menuPhysics;
+        std::unique_ptr<GameSimulation> menuSimulation;
+        std::mt19937 menuRng{std::random_device{}()};
+        const auto unloadMenuBackground = [&]() {
+            menuSimulation.reset();
+            menuPhysics.reset();
+            menuMap.reset();
+        };
+        const auto loadMenuBackground = [&]() {
+            unloadMenuBackground();
+            if (backgroundMaps.empty()) {
+                return;
+            }
+            std::uniform_int_distribution<std::size_t> distribution(0, backgroundMaps.size() - 1);
+            const std::filesystem::path chosen = backgroundMaps[distribution(menuRng)];
+            try {
+                std::filesystem::path mapPath = chosen;
+                if (gameFiles && !mapPath.is_absolute()) {
+                    mapPath = gameFiles->Materialize(mapPath.generic_string());
+                }
+                menuMap = std::make_unique<BspLoader>(mapPath.string(), gameFiles.get());
+                menuPhysics = std::make_unique<PhysicsWorld>();
+                menuSimulation = std::make_unique<GameSimulation>(*menuMap, *menuPhysics, gameFiles.get(), &audio);
+                std::cout << "Menu background: " << chosen.filename().string() << std::endl;
+            } catch (const std::exception& error) {
+                std::cerr << "Menu background failed: " << error.what() << std::endl;
+                unloadMenuBackground();
+            }
+        };
+        loadMenuBackground();
         std::vector<std::string> mapLabels;
         mapLabels.reserve(mapFiles.size() + 1);
         for (const auto& mapPath : mapFiles) {
@@ -643,6 +1026,12 @@ int main(int argc, char* argv[]) {
 
         bool showDebugOverlay = true;
         bool showEntitySpawnLabels = false;
+        bool showCollisionMesh = false;
+        struct CachedCollisionMesh {
+            std::uint32_t revision = 0;
+            std::unique_ptr<DebugTriangleMesh> mesh;
+        };
+        std::unordered_map<std::uint64_t, CachedCollisionMesh> collisionDebugMeshes;
         float frameTimeAccumulator = 0.0F;
         int frameCountAccumulator = 0;
         float displayedFps = 0.0F;
@@ -698,8 +1087,18 @@ int main(int argc, char* argv[]) {
                 }
                 if (menuAction == ui::MenuAction::NewGame) {
                     selectedMap = std::min(mainMenu.Options().selectedMapIndex, static_cast<int>(mapFiles.size()));
+                    chapterMapPath.clear();
                     mapTestRequested = false;
                     startRequested = true;
+                }
+                if (menuAction == ui::MenuAction::StartChapter) {
+                    const int chapterIndex = mainMenu.ChapterIndex();
+                    if (chapterIndex >= 0 && chapterIndex < static_cast<int>(chapters.size())
+                        && !chapters[static_cast<std::size_t>(chapterIndex)].mapName.empty()) {
+                        chapterMapPath = "maps/" + chapters[static_cast<std::size_t>(chapterIndex)].mapName + ".bsp";
+                        mapTestRequested = false;
+                        startRequested = true;
+                    }
                 }
                 if (menuAction == ui::MenuAction::MapTest) {
                     selectedMap = std::min(mainMenu.Options().selectedMapIndex, static_cast<int>(mapFiles.size()));
@@ -771,14 +1170,22 @@ int main(int argc, char* argv[]) {
             }
 
             if (startRequested) {
-                if (selectedMap < static_cast<int>(mapFiles.size())) {
+                unloadMenuBackground();
+                const bool loadChapterMap = !chapterMapPath.empty();
+                if (loadChapterMap || selectedMap < static_cast<int>(mapFiles.size())) {
                     windowState.noclip = mapTestRequested;
                     camera.pitch = -18.0F;
-                    bspMap = std::make_unique<BspLoader>(mapFiles[static_cast<std::size_t>(selectedMap)].string());
+                    std::filesystem::path mapPath = loadChapterMap
+                        ? chapterMapPath
+                        : mapFiles[static_cast<std::size_t>(selectedMap)];
+                    if (gameFiles && !mapPath.is_absolute()) {
+                        mapPath = gameFiles->Materialize(mapPath.generic_string());
+                    }
+                    bspMap = std::make_unique<BspLoader>(mapPath.string(), gameFiles.get());
                     std::cout << "BSP assets ready" << std::endl;
                     physicsWorld.SetCollisionMesh(bspMap->CollisionVertices(), bspMap->CollisionIndices());
                     physicsWorld.SetDynamicBoxes(bspMap->PropPositions());
-                    propCube = std::make_unique<Mesh>(crateVertices, crateIndices);
+                    propCube = std::make_unique<Mesh>(WithStyleChannel(crateVertices), crateIndices);
                     std::cout << "Jolt world ready, loaded " << bspMap->PropPositions().size() << " props" << std::endl;
                     player.SetPhysicsWorld(&physicsWorld);
                     player.SetWorldBounds(bspMap->WorldMinimum(), bspMap->WorldMaximum());
@@ -789,14 +1196,18 @@ int main(int argc, char* argv[]) {
                         player.SetPosition({center.x, bspMap->WorldMinimum().y + 1.0F, center.z});
                     }
                     camera.position = player.EyePosition();
+                    gameSim = std::make_unique<GameSimulation>(*bspMap, physicsWorld, gameFiles.get(), &audio);
+                    gameSim->SetCurrentMap(mapPath.stem().string());
                     cube.reset();
                     demoRoom.reset();
                 } else {
                     windowState.noclip = mapTestRequested;
-                    cube = std::make_unique<Mesh>(vertices, indices);
-                    demoRoom = std::make_unique<Mesh>(roomVertices, roomIndices);
-                    propCube = std::make_unique<Mesh>(crateVertices, crateIndices);
+                    cube = std::make_unique<Mesh>(WithStyleChannel(vertices), indices);
+                    demoRoom = std::make_unique<Mesh>(WithStyleChannel(roomVertices), roomIndices);
+                    propCube = std::make_unique<Mesh>(WithStyleChannel(crateVertices), crateIndices);
                     bspMap.reset();
+                    collisionDebugMeshes.clear();
+                    gameSim.reset();
                     physicsWorld.SetCollisionMesh({}, {});
                     physicsWorld.SetDynamicBoxes({});
                     player.SetPhysicsWorld(&physicsWorld);
@@ -813,9 +1224,12 @@ int main(int argc, char* argv[]) {
                 }
                 startRequested = false;
                 mapTestRequested = false;
+                chapterMapPath.clear();
             }
             if (returnToMenuRequested) {
                 bspMap.reset();
+                collisionDebugMeshes.clear();
+                gameSim.reset();
                 cube.reset();
                 demoRoom.reset();
                 propCube.reset();
@@ -828,11 +1242,11 @@ int main(int argc, char* argv[]) {
                     audio.StopAmbientLoop();
                 }
                 footstepDistanceAccumulator = 0.0F;
+                loadMenuBackground();
                 returnToMenuRequested = false;
             }
 
             if (screen == Screen::Playing) {
-                physicsWorld.StepSimulation(deltaTime);
                 ProcessInput(
                     window,
                     camera,
@@ -842,8 +1256,24 @@ int main(int argc, char* argv[]) {
                     player.EyePosition(),
                     physicsWorld,
                     showDebugOverlay,
-                    showEntitySpawnLabels
+                    showEntitySpawnLabels,
+                    showCollisionMesh
                 );
+                constexpr float kKeyboardYawSpeed = 140.0F;
+                constexpr float kKeyboardPitchSpeed = 150.0F;
+                if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+                    camera.yaw -= kKeyboardYawSpeed * deltaTime;
+                }
+                if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+                    camera.yaw += kKeyboardYawSpeed * deltaTime;
+                }
+                if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+                    camera.pitch += kKeyboardPitchSpeed * deltaTime;
+                }
+                if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+                    camera.pitch -= kKeyboardPitchSpeed * deltaTime;
+                }
+                camera.pitch = glm::clamp(camera.pitch, -89.0F, 89.0F);
                 glm::vec3 movementFront = camera.Front();
                 movementFront.y = 0.0F;
                 if (glm::length(movementFront) > 0.0F) {
@@ -853,6 +1283,13 @@ int main(int argc, char* argv[]) {
                     movementFront,
                     glm::vec3(0.0F, 1.0F, 0.0F)
                 ));
+                bool inWater = false;
+                if (bspMap && !windowState.noclip) {
+                    const int contents = bspMap->PointContents(player.Position())
+                        | bspMap->PointContents(player.EyePosition());
+                    inWater = (contents & (kBspContentsWater | kBspContentsSlime)) != 0;
+                }
+                player.SetInWater(inWater);
                 player.Update(
                     deltaTime,
                     movementFront,
@@ -861,6 +1298,119 @@ int main(int argc, char* argv[]) {
                     glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
                 );
                 camera.position = player.EyePosition();
+                if (gameSim) {
+                    gameSim->Update(deltaTime, player, player.EyePosition(), camera.Front(), window);
+                    LevelChangeRequest levelChange;
+                    if (gameSim->ConsumeLevelChange(levelChange)) {
+                        const auto lowerCopy = [](std::string value) {
+                            for (char& character : value) {
+                                character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+                            }
+                            return value;
+                        };
+                        const auto presentLoading = [&](float progress) {
+                            int loadingWidth = 0;
+                            int loadingHeight = 0;
+                            glfwGetFramebufferSize(window, &loadingWidth, &loadingHeight);
+                            glViewport(0, 0, std::max(loadingWidth, 1), std::max(loadingHeight, 1));
+                            glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+                            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                            uiBackend.BeginRender(loadingWidth, loadingHeight);
+                            loadingScreen.Render(uiBackend, levelChange.mapName, progress);
+                            uiBackend.EndRender();
+                            glfwSwapBuffers(window);
+                            glfwPollEvents();
+                        };
+
+                        const std::string wantedMap = lowerCopy(levelChange.mapName);
+                        std::filesystem::path mapPath;
+                        int destinationMap = selectedMap;
+                        for (std::size_t index = 0; index < mapFiles.size(); ++index) {
+                            if (lowerCopy(mapFiles[index].stem().string()) == wantedMap) {
+                                mapPath = mapFiles[index];
+                                destinationMap = static_cast<int>(index);
+                                break;
+                            }
+                        }
+                        if (mapPath.empty()) {
+                            std::cerr << "Map not found: " << levelChange.mapName << '\n';
+                        } else {
+                            if (gameFiles && !mapPath.is_absolute()) {
+                                mapPath = gameFiles->Materialize(mapPath.generic_string());
+                            }
+                            presentLoading(0.08F);
+                            std::unique_ptr<BspLoader> nextMap;
+                            try {
+                                nextMap = std::make_unique<BspLoader>(mapPath.string(), gameFiles.get());
+                            } catch (const std::exception& error) {
+                                std::cerr << error.what() << '\n';
+                            }
+                            if (nextMap) {
+                                physicsWorld.SetCollisionMesh(nextMap->CollisionVertices(), nextMap->CollisionIndices());
+                                physicsWorld.SetDynamicBoxes(nextMap->PropPositions());
+                                if (!propCube) {
+                                    propCube = std::make_unique<Mesh>(WithStyleChannel(crateVertices), crateIndices);
+                                }
+                                presentLoading(0.55F);
+                                std::unique_ptr<GameSimulation> nextSim;
+                                try {
+                                    nextSim = std::make_unique<GameSimulation>(*nextMap, physicsWorld, gameFiles.get(), &audio);
+                                } catch (const std::exception& error) {
+                                    std::cerr << error.what() << '\n';
+                                }
+                                if (!nextSim) {
+                                    if (bspMap) {
+                                        physicsWorld.SetCollisionMesh(bspMap->CollisionVertices(), bspMap->CollisionIndices());
+                                        physicsWorld.SetDynamicBoxes(bspMap->PropPositions());
+                                        try {
+                                            gameSim = std::make_unique<GameSimulation>(*bspMap, physicsWorld, gameFiles.get(), &audio);
+                                            if (selectedMap >= 0 && static_cast<std::size_t>(selectedMap) < mapFiles.size()) {
+                                                gameSim->SetCurrentMap(mapFiles[static_cast<std::size_t>(selectedMap)].stem().string());
+                                            }
+                                        } catch (const std::exception& error) {
+                                            std::cerr << error.what() << '\n';
+                                            gameSim.reset();
+                                        }
+                                    }
+                                    player.SetPhysicsWorld(&physicsWorld);
+                                    if (bspMap) {
+                                        player.SetWorldBounds(bspMap->WorldMinimum(), bspMap->WorldMaximum());
+                                    }
+                                    player.SetPosition(levelChange.playerFeet);
+                                    camera.position = player.EyePosition();
+                                } else {
+                                    gameSim.reset();
+                                    bspMap = std::move(nextMap);
+                                    gameSim = std::move(nextSim);
+                                    gameSim->SetCurrentMap(levelChange.mapName);
+                                    player.SetPhysicsWorld(&physicsWorld);
+                                    player.SetWorldBounds(bspMap->WorldMinimum(), bspMap->WorldMaximum());
+                                    gameSim->RestorePlayerState(levelChange.player);
+                                    glm::vec3 destinationLandmark{0.0F};
+                                    const glm::vec3 offset = levelChange.playerFeet - levelChange.landmarkOrigin;
+                                    if (gameSim->FindLandmark(levelChange.landmarkName, destinationLandmark)) {
+                                        player.SetPosition(destinationLandmark + offset);
+                                        gameSim->SpawnCarriedEntities(levelChange.entities, destinationLandmark);
+                                    } else {
+                                        std::cerr << "Level transition landmark \"" << levelChange.landmarkName
+                                                  << "\" not found in " << levelChange.mapName << '\n';
+                                        if (bspMap->HasPlayerStartPosition()) {
+                                            player.SetPosition(bspMap->PlayerStartPosition() + glm::vec3(0.0F, 0.25F, 0.0F));
+                                        } else {
+                                            const glm::vec3 center = (bspMap->WorldMinimum() + bspMap->WorldMaximum()) * 0.5F;
+                                            player.SetPosition({center.x, bspMap->WorldMinimum().y + 1.0F, center.z});
+                                        }
+                                    }
+                                    camera.position = player.EyePosition();
+                                    selectedMap = destinationMap;
+                                    footstepPreviousPosition = player.Position();
+                                    footstepDistanceAccumulator = 0.0F;
+                                    presentLoading(1.0F);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (audioReady && player.IsGrounded() && !player.IsNoclip()) {
                     const glm::vec3 currentPosition = player.Position();
@@ -881,6 +1431,7 @@ int main(int argc, char* argv[]) {
                     footstepPreviousPosition = player.Position();
                     footstepDistanceAccumulator = 0.0F;
                 }
+                physicsWorld.StepSimulation(deltaTime);
             }
 
             // Frame time and FPS statistics
@@ -950,9 +1501,19 @@ int main(int argc, char* argv[]) {
                 flashlight.position = camera.position;
                 flashlight.direction = camera.Front();
 
-                // Sort point lights by distance to camera; only render shadows for lights within cull range.
-                std::vector<PointLight> sortedPointLights = pointLights;
+                // Map lights fill the first slots. Player-spawned lights use whatever remains.
                 const glm::vec3 camPos = camera.position;
+                if (bspMap) {
+                    std::vector<std::pair<std::string, bool>> doorStates;
+                    if (gameSim) {
+                        gameSim->CollectDoorStates(doorStates);
+                    }
+                    bspMap->UpdateVisibility(camPos, projection * view, doorStates);
+                }
+                if (gameSim) {
+                    gameSim->SetViewPosition(camPos);
+                }
+                std::vector<PointLight> sortedPointLights = SelectFramePointLights(bspMap.get(), pointLights, camPos);
                 const float shadowCullDistSq = ShadowManager::kShadowCameraCullDistance
                     * ShadowManager::kShadowCameraCullDistance;
                 std::sort(
@@ -1096,22 +1657,43 @@ int main(int argc, char* argv[]) {
                     flashlight.quadratic,
                     flashlight.enabled
                 );
+                UploadMapSpotsAndSun(shader, bspMap.get(), camPos);
+                shader.SetBool("UseSpriteTint", false);
+                shader.SetBool("FogEnabled", false);
 
                 const glm::mat4 viewProj = projection * view;
 
                 if (bspMap) {
+                    DrawSkyPasses(
+                        shader,
+                        skyShader,
+                        *bspMap,
+                        gameSim.get(),
+                        view,
+                        projection,
+                        glm::radians(45.0F),
+                        aspect,
+                        camPos,
+                        camera.Front(),
+                        glm::vec3(0.0F, 1.0F, 0.0F),
+                        time
+                    );
+                    bspMap->PrepareFrame(shader, camPos, time);
                     bspMap->Draw(shader, viewProj);
                     if (propCube) {
                         shader.SetBool("UseTexture", false);
                         shader.SetBool("UseLightmap", false);
+                        shader.SetInt("AlphaMode", 0);
                         shader.SetFloat("Opacity", 1.0F);
+                        glDisable(GL_BLEND);
                         for (const glm::mat4& propModel : propMatrices) {
                             shader.SetMat4("Model", propModel);
                             propCube->Draw();
                         }
                         if (showEntitySpawnLabels) {
+                            shader.SetFloat("Opacity", 0.85F);
+                            shader.SetInt("AlphaMode", 0);
                             for (const BspMapEntity& entity : bspMap->MapEntities()) {
-                                shader.SetFloat("Opacity", 0.85F);
                                 const glm::mat4 markerModel = glm::translate(glm::mat4(1.0F), entity.position)
                                     * glm::scale(glm::mat4(1.0F), glm::vec3(0.35F));
                                 shader.SetMat4("Model", markerModel);
@@ -1122,7 +1704,15 @@ int main(int argc, char* argv[]) {
                         shader.SetFloat("Opacity", 1.0F);
                         shader.SetMat4("Model", model);
                     }
+                    if (gameSim) {
+                        gameSim->Draw(shader);
+                    }
+                    bspMap->DrawTransparent(shader, viewProj);
                     bspMap->DrawDecals(shader, viewProj);
+                    if (gameSim) {
+                        gameSim->DrawTransparent(shader);
+                    }
+                    bspMap->DrawSprites(shader, view);
                 } else {
                     shader.SetBool("UseTexture", false);
                     shader.SetBool("UseLightmap", false);
@@ -1144,34 +1734,176 @@ int main(int argc, char* argv[]) {
                         shader.SetMat4("Model", model);
                     }
                 }
-            } else if (screen == Screen::MainMenu && menuBackdrop) {
+
+                if (showCollisionMesh) {
+                    std::vector<PhysicsDebugShape> debugShapes;
+                    physicsWorld.CollectDebugShapes(debugShapes);
+                    if (gameSim) {
+                        gameSim->AppendDebugShapes(debugShapes);
+                    }
+
+                    std::unordered_set<std::uint64_t> liveShapes;
+                    liveShapes.reserve(debugShapes.size());
+                    for (const PhysicsDebugShape& shape : debugShapes) {
+                        if (shape.vertices == nullptr || shape.indices == nullptr || shape.indices->size() < 3) {
+                            continue;
+                        }
+                        liveShapes.insert(shape.key);
+                        CachedCollisionMesh& cached = collisionDebugMeshes[shape.key];
+                        if (cached.mesh == nullptr || cached.revision != shape.revision) {
+                            cached.revision = shape.revision;
+                            cached.mesh = std::make_unique<DebugTriangleMesh>(*shape.vertices, *shape.indices);
+                        }
+                    }
+                    for (auto it = collisionDebugMeshes.begin(); it != collisionDebugMeshes.end();) {
+                        if (!liveShapes.contains(it->first)) {
+                            it = collisionDebugMeshes.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+
+                    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+                    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+                    const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+                    glDisable(GL_DEPTH_TEST);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_BLEND);
+                    glDepthMask(GL_FALSE);
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+                    for (const PhysicsDebugShape& shape : debugShapes) {
+                        const auto found = collisionDebugMeshes.find(shape.key);
+                        if (found == collisionDebugMeshes.end() || found->second.mesh == nullptr) {
+                            continue;
+                        }
+                        DrawBlueWireframe(debugShader, *found->second.mesh, shape.transform, view, projection);
+                    }
+
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                    glDepthMask(GL_TRUE);
+                    if (depthWasEnabled == GL_TRUE) {
+                        glEnable(GL_DEPTH_TEST);
+                    }
+                    if (blendWasEnabled == GL_TRUE) {
+                        glEnable(GL_BLEND);
+                    }
+                    if (cullWasEnabled == GL_TRUE) {
+                        glEnable(GL_CULL_FACE);
+                    }
+                    glBindVertexArray(0);
+                }
+            } else if (screen == Screen::MainMenu && (menuMap || menuBackdrop)) {
                 glViewport(0, 0, framebufferWidth, framebufferHeight);
-                glClearColor(0.08F, 0.09F, 0.11F, 1.0F);
+                glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                 glEnable(GL_DEPTH_TEST);
                 glDepthFunc(GL_LESS);
                 glDepthMask(GL_TRUE);
 
-                const float orbitRadius = 11.0F;
-                const glm::vec3 menuEye{
-                    orbitRadius * std::cos(time * 0.12F),
-                    2.8F,
-                    orbitRadius * std::sin(time * 0.12F)
-                };
-                const glm::vec3 menuTarget{0.0F, 1.6F, 0.0F};
-                const glm::mat4 menuView = glm::lookAt(menuEye, menuTarget, glm::vec3(0.0F, 1.0F, 0.0F));
+                glm::mat4 menuView{1.0F};
+                glm::mat4 menuProjection = projection;
+                glm::vec3 menuEyePos{0.0F, 2.8F, 11.0F};
+                glm::vec3 menuFront{0.0F, 0.0F, -1.0F};
+                glm::vec3 menuUp{0.0F, 1.0F, 0.0F};
+                float menuFovRadians = glm::radians(45.0F);
+                if (menuMap) {
+                    const ui::MenuCameraFrame menuCamera = ui::BuildMenuCameraFrame(*menuMap, time);
+                    menuFovRadians = glm::radians(menuCamera.fovDegrees);
+                    menuEyePos = menuCamera.eye;
+                    menuFront = menuCamera.target - menuCamera.eye;
+                    if (glm::length(menuFront) > 1.0e-4F) {
+                        menuFront = glm::normalize(menuFront);
+                    }
+                    menuUp = menuCamera.up;
+                    menuView = glm::lookAt(menuCamera.eye, menuCamera.target, menuCamera.up);
+                    menuProjection = glm::perspective(
+                        menuFovRadians,
+                        aspect,
+                        0.005F,
+                        512.0F
+                    );
+                } else {
+                    const float orbitRadius = 11.0F;
+                    const glm::vec3 menuEye{
+                        orbitRadius * std::cos(time * 0.12F),
+                        2.8F,
+                        orbitRadius * std::sin(time * 0.12F)
+                    };
+                    menuEyePos = menuEye;
+                    const glm::vec3 menuTarget{0.0F, 1.6F, 0.0F};
+                    menuView = glm::lookAt(menuEye, menuTarget, glm::vec3(0.0F, 1.0F, 0.0F));
+                }
 
                 shader.Use();
                 shader.SetMat4("Model", glm::mat4(1.0F));
                 shader.SetMat4("View", menuView);
-                shader.SetMat4("Projection", projection);
-                shader.SetInt("NumPointLights", 0);
+                shader.SetMat4("Projection", menuProjection);
                 shader.SetBool("Flashlight.enabled", false);
+                shader.SetBool("UseSpriteTint", false);
                 shader.SetBool("UseTexture", false);
                 shader.SetBool("UseLightmap", false);
                 shader.SetFloat("Opacity", 1.0F);
                 shadowManager.BindForRendering(shader, false, 0);
-                menuBackdrop->Draw();
+                if (menuMap) {
+                    const std::vector<PointLight> menuLights = SelectFramePointLights(menuMap.get(), {}, menuEyePos);
+                    const int menuLightCount = static_cast<int>(menuLights.size());
+                    shader.SetInt("NumPointLights", menuLightCount);
+                    for (int lightIndex = 0; lightIndex < menuLightCount; ++lightIndex) {
+                        const PointLight& light = menuLights[static_cast<std::size_t>(lightIndex)];
+                        shader.SetPointLightUniform(
+                            lightIndex,
+                            light.position,
+                            light.color,
+                            light.intensity,
+                            light.constant,
+                            light.linear,
+                            light.quadratic
+                        );
+                    }
+                    UploadMapSpotsAndSun(shader, menuMap.get(), menuEyePos);
+                    const glm::mat4 menuViewProj = menuProjection * menuView;
+                    {
+                        std::vector<std::pair<std::string, bool>> doorStates;
+                        if (menuSimulation) {
+                            menuSimulation->CollectDoorStates(doorStates);
+                        }
+                        menuMap->UpdateVisibility(menuEyePos, menuViewProj, doorStates);
+                    }
+                    if (menuSimulation) {
+                        menuSimulation->SetViewPosition(menuEyePos);
+                    }
+                    DrawSkyPasses(
+                        shader,
+                        skyShader,
+                        *menuMap,
+                        menuSimulation.get(),
+                        menuView,
+                        menuProjection,
+                        menuFovRadians,
+                        aspect,
+                        menuEyePos,
+                        menuFront,
+                        menuUp,
+                        time
+                    );
+                    menuMap->PrepareFrame(shader, menuEyePos, time);
+                    menuMap->Draw(shader, menuViewProj);
+                    if (menuSimulation) {
+                        menuSimulation->Draw(shader);
+                    }
+                    menuMap->DrawTransparent(shader, menuViewProj);
+                    menuMap->DrawDecals(shader, menuViewProj);
+                    if (menuSimulation) {
+                        menuSimulation->DrawTransparent(shader);
+                    }
+                    menuMap->DrawSprites(shader, menuView);
+                } else if (menuBackdrop) {
+                    shader.SetInt("NumPointLights", 0);
+                    shader.SetBool("FogEnabled", false);
+                    UploadMapSpotsAndSun(shader, nullptr, menuEyePos);
+                    menuBackdrop->Draw();
+                }
             } else {
                 glViewport(0, 0, framebufferWidth, framebufferHeight);
                 glClearColor(0.18F, 0.18F, 0.18F, 1.0F);
@@ -1181,7 +1913,7 @@ int main(int argc, char* argv[]) {
             // 2D Valve VGUI Pass
             uiBackend.BeginRender(framebufferWidth, framebufferHeight);
             if (screen == Screen::MainMenu) {
-                menuRenderer.Render(uiBackend, mainMenu, time, mapLabels);
+                menuRenderer.Render(uiBackend, mainMenu, time, mapLabels, gameLabel, chapters);
             } else if (screen == Screen::Playing) {
                 if (bspMap && showEntitySpawnLabels) {
                     const bool showEntityDetails = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
@@ -1212,6 +1944,7 @@ int main(int argc, char* argv[]) {
             audio.StopAmbientLoop();
             audio.Shutdown();
         }
+        ui::ReleaseChapterPreviews(chapters);
         uiBackend.Shutdown();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

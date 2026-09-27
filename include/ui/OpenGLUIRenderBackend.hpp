@@ -46,6 +46,15 @@ public:
     void DrawFilledRect(const Vec2& min, const Vec2& max, Color color) override;
     void DrawRectBorder(const Vec2& min, const Vec2& max, Color color, float thickness) override;
     void DrawLine(const Vec2& p0, const Vec2& p1, Color color, float thickness = 1.0F) override;
+    void DrawImage(
+        const Vec2& min,
+        const Vec2& max,
+        unsigned int texture,
+        float u0 = 0.0F,
+        float v0 = 0.0F,
+        float u1 = 1.0F,
+        float v1 = 1.0F
+    ) override;
     void DrawBevelRect(
         const Vec2& min,
         const Vec2& max,
@@ -148,8 +157,13 @@ private:
     FontData fontMono_{};
     bool fontInitialized_ = false;
 
+    enum class UiBatchKind : std::uint8_t { Solid, Font, Image };
+
+    void EnsureBatch(UiBatchKind kind, unsigned int imageTexture = 0);
+
     std::vector<UiVertex> batch_;
-    bool drawingSolid_ = true;
+    UiBatchKind batchKind_ = UiBatchKind::Solid;
+    unsigned int imageTexture_ = 0;
 
     // OpenGL state save/restore during 2D render pass
     unsigned char savedDepthTest_ = 1;

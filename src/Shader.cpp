@@ -105,6 +105,23 @@ void Shader::CacheLightUniformLocations() const {
     spotLightLocs_.linear = glGetUniformLocation(program_, "Flashlight.linear");
     spotLightLocs_.quadratic = glGetUniformLocation(program_, "Flashlight.quadratic");
     spotLightLocs_.enabled = glGetUniformLocation(program_, "Flashlight.enabled");
+    for (int i = 0; i < 8; ++i) {
+        const std::string base = "MapSpots[" + std::to_string(i) + "].";
+        mapSpotLocs_[i].pos = glGetUniformLocation(program_, (base + "position").c_str());
+        mapSpotLocs_[i].dir = glGetUniformLocation(program_, (base + "direction").c_str());
+        mapSpotLocs_[i].color = glGetUniformLocation(program_, (base + "color").c_str());
+        mapSpotLocs_[i].intensity = glGetUniformLocation(program_, (base + "intensity").c_str());
+        mapSpotLocs_[i].innerCutOff = glGetUniformLocation(program_, (base + "innerCutOff").c_str());
+        mapSpotLocs_[i].outerCutOff = glGetUniformLocation(program_, (base + "outerCutOff").c_str());
+        mapSpotLocs_[i].constant = glGetUniformLocation(program_, (base + "constant").c_str());
+        mapSpotLocs_[i].linear = glGetUniformLocation(program_, (base + "linear").c_str());
+        mapSpotLocs_[i].quadratic = glGetUniformLocation(program_, (base + "quadratic").c_str());
+        mapSpotLocs_[i].enabled = glGetUniformLocation(program_, (base + "enabled").c_str());
+    }
+    sunDirectionLoc_ = glGetUniformLocation(program_, "SunDirection");
+    sunColorLoc_ = glGetUniformLocation(program_, "SunColor");
+    sunIntensityLoc_ = glGetUniformLocation(program_, "SunIntensity");
+    sunAmbientLoc_ = glGetUniformLocation(program_, "AmbientColor");
     lightUniformsCached_ = true;
 }
 
@@ -157,6 +174,53 @@ void Shader::SetSpotlightUniform(
     if (spotLightLocs_.quadratic != -1) glUniform1f(spotLightLocs_.quadratic, quadratic);
 }
 
+void Shader::SetMapSpotUniform(
+    int index,
+    const glm::vec3& position,
+    const glm::vec3& direction,
+    const glm::vec3& color,
+    float intensity,
+    float innerCutOff,
+    float outerCutOff,
+    float constant,
+    float linear,
+    float quadratic,
+    bool enabled
+) const {
+    if (!lightUniformsCached_) {
+        CacheLightUniformLocations();
+    }
+    if (index < 0 || index >= 8) {
+        return;
+    }
+    const auto& loc = mapSpotLocs_[index];
+    if (loc.enabled != -1) glUniform1i(loc.enabled, enabled ? 1 : 0);
+    if (loc.pos != -1) glUniform3fv(loc.pos, 1, glm::value_ptr(position));
+    if (loc.dir != -1) glUniform3fv(loc.dir, 1, glm::value_ptr(direction));
+    if (loc.color != -1) glUniform3fv(loc.color, 1, glm::value_ptr(color));
+    if (loc.intensity != -1) glUniform1f(loc.intensity, intensity);
+    if (loc.innerCutOff != -1) glUniform1f(loc.innerCutOff, innerCutOff);
+    if (loc.outerCutOff != -1) glUniform1f(loc.outerCutOff, outerCutOff);
+    if (loc.constant != -1) glUniform1f(loc.constant, constant);
+    if (loc.linear != -1) glUniform1f(loc.linear, linear);
+    if (loc.quadratic != -1) glUniform1f(loc.quadratic, quadratic);
+}
+
+void Shader::SetSunUniform(
+    const glm::vec3& direction,
+    const glm::vec3& color,
+    float intensity,
+    const glm::vec3& ambient
+) const {
+    if (!lightUniformsCached_) {
+        CacheLightUniformLocations();
+    }
+    if (sunDirectionLoc_ != -1) glUniform3fv(sunDirectionLoc_, 1, glm::value_ptr(direction));
+    if (sunColorLoc_ != -1) glUniform3fv(sunColorLoc_, 1, glm::value_ptr(color));
+    if (sunIntensityLoc_ != -1) glUniform1f(sunIntensityLoc_, intensity);
+    if (sunAmbientLoc_ != -1) glUniform3fv(sunAmbientLoc_, 1, glm::value_ptr(ambient));
+}
+
 void Shader::SetInt(const std::string& name, int value) const {
     const GLint location = GetUniformLocation(name);
     if (location != -1) {
@@ -172,6 +236,13 @@ void Shader::SetFloat(const std::string& name, float value) const {
     const GLint location = GetUniformLocation(name);
     if (location != -1) {
         glUniform1f(location, value);
+    }
+}
+
+void Shader::SetFloatArray(const std::string& name, const float* values, int count) const {
+    const GLint location = GetUniformLocation(name);
+    if (location != -1 && values != nullptr && count > 0) {
+        glUniform1fv(location, count, values);
     }
 }
 

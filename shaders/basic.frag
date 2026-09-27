@@ -3,6 +3,7 @@
 in vec3 vertexColor;
 in vec2 textureCoord;
 in vec2 lightmapCoord;
+in float lightStyle;
 in vec3 FragPos;
 in vec4 FragPosLightSpace;
 
@@ -10,10 +11,11 @@ out vec4 fragmentColor;
 
 uniform sampler2D Texture0;
 uniform bool UseTexture;
-uniform sampler2D Lightmap0;
+uniform sampler2DArray Lightmap0;
 uniform bool UseLightmap;
 uniform float Opacity;
 uniform bool DecalPass;
+uniform int AlphaMode;
 
 struct PointLight {
     vec3 position;
@@ -42,6 +44,31 @@ struct SpotLight {
 };
 
 uniform SpotLight Flashlight;
+
+#define MAX_MAP_SPOTS 8
+uniform int NumMapSpots;
+uniform SpotLight MapSpots[MAX_MAP_SPOTS];
+
+uniform vec3 SunDirection;
+uniform vec3 SunColor;
+uniform float SunIntensity;
+uniform vec3 AmbientColor;
+uniform float LightStyleValues[64];
+uniform bool FogEnabled;
+uniform vec3 FogColor;
+uniform float FogStart;
+uniform float FogEnd;
+uniform float FogMaxDensity;
+uniform vec3 CameraPos;
+uniform bool UseSpriteTint;
+uniform vec3 SpriteTint;
+uniform vec3 PropTint;
+uniform bool UseEnvmap;
+uniform vec3 EnvmapTint;
+uniform samplerCube Envmap0;
+uniform bool WarpSurface;
+uniform float WaterSurfaceY;
+uniform bool CameraUnderwater;
 
 uniform sampler2DShadow FlashlightShadowMap;
 uniform bool FlashlightCastShadow;
@@ -115,9 +142,31 @@ float CalculatePointShadow(int lightIndex, float diff, vec3 fragToLight, float d
 
 void main() {
     vec4 texColor = texture(Texture0, textureCoord);
+    if (AlphaMode == 4 && UseTexture) {
+        fragmentColor = vec4(texColor.rgb, 1.0);
+        return;
+    }
+    if (AlphaMode == 3) {
+        vec3 glow = UseTexture ? texColor.rgb : vertexColor;
+        if (UseSpriteTint) {
+            glow *= SpriteTint;
+        }
+        float glowAlpha = UseTexture ? texColor.a : 1.0;
+        fragmentColor = vec4(glow, glowAlpha * Opacity);
+        return;
+    }
+    float alpha = Opacity;
+    if (UseTexture && AlphaMode == 1) {
+        alpha = texColor.a > 0.97 ? Opacity : texColor.a * Opacity;
+    } else if (UseTexture && AlphaMode == 2 && texColor.a < 0.5) {
+        discard;
+    }
     vec4 baseColor = UseTexture
-        ? vec4(texColor.rgb, texColor.a * Opacity)
+        ? vec4(texColor.rgb, alpha)
         : vec4(vertexColor, Opacity);
+    if (UseSpriteTint) {
+        baseColor.rgb *= SpriteTint;
+    }
 
     if (DecalPass) {
         if (baseColor.a < 0.02) {
@@ -125,19 +174,37 @@ void main() {
         }
     }
 
-    vec3 ambient = UseLightmap ? vec3(0.0) : vec3(0.35);
-    vec3 bakedLight = UseLightmap ? texture(Lightmap0, lightmapCoord).rgb * 2.0 : vec3(0.0);
+    vec3 bakedLight = vec3(0.0);
+    if (lightStyle < -0.5) {
+        bakedLight = vertexColor;
+    } else if (UseLightmap) {
+        bakedLight = texture(Lightmap0, vec3(lightmapCoord, 0.0)).rgb;
+        int styleId = int(lightStyle + 0.5);
+        if (styleId > 0 && styleId < 64) {
+            bakedLight += texture(Lightmap0, vec3(lightmapCoord, 1.0)).rgb * LightStyleValues[styleId];
+        }
+        bakedLight = min(bakedLight, vec3(1.0));
+    }
+    // Props and other unlit models have no lightmap. The sun is already baked
+    // into the world, so a full light_environment here blows them out.
+    vec3 propAmbient = dot(PropTint, PropTint) > 1.0e-6 ? PropTint : vec3(0.35);
+    vec3 ambient = (UseLightmap || lightStyle < -0.5) ? vec3(0.0) : propAmbient;
 
     vec3 dynamicLight = vec3(0.0);
     int count = clamp(NumPointLights, 0, MAX_POINT_LIGHTS);
+    int spotCount = clamp(NumMapSpots, 0, MAX_MAP_SPOTS);
 
     // Compute normal only if dynamic lights are active, avoiding screen-space derivatives when unnecessary
-    if (count > 0 || Flashlight.enabled) {
+    vec3 shadedNormal = vec3(0.0, 1.0, 0.0);
+    bool hasNormal = false;
+    if (count > 0 || Flashlight.enabled || spotCount > 0 || UseEnvmap) {
         vec3 dX = dFdx(FragPos);
         vec3 dY = dFdy(FragPos);
         vec3 normal = cross(dX, dY);
         float normalLen = length(normal);
         normal = (normalLen > 1.0e-6) ? (normal / normalLen) : vec3(0.0, 1.0, 0.0);
+        shadedNormal = normal;
+        hasNormal = true;
 
         const float kMaxPointLightDistSq = PointShadowFarPlane * PointShadowFarPlane;
 
@@ -199,8 +266,58 @@ void main() {
                 }
             }
         }
+
+        const float kMaxMapSpotDistSq = 128.0 * 128.0;
+        for (int s = 0; s < spotCount; ++s) {
+            if (!MapSpots[s].enabled) {
+                continue;
+            }
+            vec3 spotDir = MapSpots[s].position - FragPos;
+            float distSq = dot(spotDir, spotDir);
+            if (distSq >= kMaxMapSpotDistSq || distSq <= 1.0e-8) {
+                continue;
+            }
+            float distance = sqrt(distSq);
+            spotDir /= distance;
+            float theta = dot(-spotDir, MapSpots[s].direction);
+            float epsilon = MapSpots[s].innerCutOff - MapSpots[s].outerCutOff;
+            float spotIntensity = clamp((theta - MapSpots[s].outerCutOff) / max(epsilon, 1.0e-4), 0.0, 1.0);
+            if (spotIntensity <= 0.0) {
+                continue;
+            }
+            float diff = abs(dot(normal, spotDir));
+            if (diff <= 0.001) {
+                continue;
+            }
+            float attenuation = 1.0 / (MapSpots[s].constant +
+                                      MapSpots[s].linear * distance +
+                                      MapSpots[s].quadratic * distSq);
+            if (attenuation * MapSpots[s].intensity < 0.001) {
+                continue;
+            }
+            dynamicLight += MapSpots[s].color * (MapSpots[s].intensity * diff * spotIntensity * attenuation);
+        }
     }
 
-    vec3 totalLight = ambient + bakedLight + dynamicLight;
-    fragmentColor = vec4(baseColor.rgb * totalLight, baseColor.a);
+    vec3 color = baseColor.rgb * (ambient + bakedLight + dynamicLight);
+    if (UseEnvmap && hasNormal) {
+        vec3 viewDir = normalize(CameraPos - FragPos);
+        vec3 reflection = reflect(-viewDir, shadedNormal);
+        vec3 cubeDir = vec3(reflection.x, reflection.y, -reflection.z);
+        float fresnel = pow(1.0 - clamp(dot(shadedNormal, viewDir), 0.0, 1.0), 4.0);
+        color += texture(Envmap0, cubeDir).rgb * EnvmapTint * mix(0.08, 1.0, fresnel);
+    }
+    if (WarpSurface) {
+        color *= vec3(0.62, 0.82, 0.86);
+        if (CameraUnderwater && FragPos.y < WaterSurfaceY) {
+            color = mix(color, vec3(0.12, 0.32, 0.38), 0.45);
+        }
+    }
+    if (FogEnabled && FogEnd > FogStart) {
+        float dist = distance(FragPos, CameraPos);
+        float reach = max(FogEnd - FogStart, 1.0e-4);
+        float fog = clamp((dist - FogStart) / reach, 0.0, 1.0) * clamp(FogMaxDensity, 0.0, 1.0);
+        color = mix(color, FogColor, fog);
+    }
+    fragmentColor = vec4(color, baseColor.a);
 }

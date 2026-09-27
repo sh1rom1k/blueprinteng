@@ -16,7 +16,7 @@ struct Color {
 
     // Classic Half-Life 2 / Source VGUI palette
     static constexpr Color Hl2Default() { return {0.72F, 0.72F, 0.72F, 0.92F}; }
-    static constexpr Color Hl2Hover() { return {0.92F, 0.58F, 0.12F, 1.0F}; }   // #EB941F Valve Orange
+    static constexpr Color Hl2Hover() { return {1.0F, 0.690196F, 0.0F, 1.0F}; }   // #FFB000 early Source orange
     static constexpr Color Hl2Active() { return {1.0F, 1.0F, 1.0F, 1.0F}; }
     static constexpr Color Hl2Dim() { return {0.45F, 0.45F, 0.45F, 0.75F}; }
     static constexpr Color Hl2PanelFill() { return {0.14F, 0.15F, 0.16F, 0.92F}; }
@@ -24,7 +24,7 @@ struct Color {
     static constexpr Color Hl2Overlay() { return {0.02F, 0.02F, 0.03F, 0.55F}; }
 
     // Valve VGUI2 window and widget styling
-    static constexpr Color ValveOrange() { return {0.92F, 0.58F, 0.12F, 1.0F}; }
+    static constexpr Color ValveOrange() { return {1.0F, 0.690196F, 0.0F, 1.0F}; }
     static constexpr Color ValveYellow() { return {0.98F, 0.82F, 0.20F, 1.0F}; }
     static constexpr Color ValveGreen() { return {0.35F, 0.78F, 0.30F, 1.0F}; }
     static constexpr Color ValveRed() { return {0.88F, 0.28F, 0.28F, 1.0F}; }
@@ -50,6 +50,7 @@ struct Vec2 {
 enum class MenuAction : std::uint8_t {
     None,
     NewGame,
+    StartChapter,
     LoadGame,
     MapTest,
     OpenOptions,
@@ -122,5 +123,31 @@ struct OptionsSettings {
     float sfxVolume = 1.0F;
     int selectedMapIndex = 0;
 };
+
+inline constexpr float kMainMenuLeft = 72.0F;
+inline constexpr float kMainMenuTop = 168.0F;
+inline constexpr float kMainMenuLineHeight = 32.0F;
+inline constexpr float kMainMenuItemFont = 20.0F;
+inline constexpr float kMainMenuTitleFont = 28.0F;
+inline constexpr float kMainMenuHitWidth = 380.0F;
+
+inline constexpr float kChapterListLeft = 72.0F;
+inline constexpr float kChapterListTop = 176.0F;
+inline constexpr float kChapterLineHeight = 32.0F;
+inline constexpr float kChapterHitWidth = 400.0F;
+inline constexpr float kChapterPreviewX = 500.0F;
+inline constexpr float kChapterPreviewY = 176.0F;
+inline constexpr float kChapterPreviewW = 384.0F;
+inline constexpr float kChapterPreviewH = 216.0F;
+inline constexpr float kChapterDifficultyY = kChapterPreviewY + kChapterPreviewH + 28.0F;
+inline constexpr float kChapterDifficultyGap = 128.0F;
+inline constexpr const char* kDifficultyLabels[] = {"EASY", "NORMAL", "HARD"};
+inline constexpr int kDifficultyCount = 3;
+
+inline int VisibleChapterRows(float displayHeight) {
+    const float available = displayHeight - kChapterListTop - 40.0F;
+    const int rows = static_cast<int>(available / kChapterLineHeight);
+    return rows < 1 ? 1 : rows;
+}
 
 } // namespace ui
