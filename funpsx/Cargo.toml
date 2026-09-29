@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cpu",
+    "crates/bus",
+    "crates/gpu",
+    "crates/gte",
+    "crates/spu",
+    "crates/cdrom",
+    "crates/dma",
+    "crates/timers",
+    "crates/interrupts",
+    "crates/core",
+    "crates/renderer",
+    "crates/renderer-opengl",
+    "crates/platform",
+    "crates/platform-desktop",
+    "crates/desktop",
+]
+default-members = ["crates/desktop"]

@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-interrupts"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation interrupt controller stub"
+publish = false

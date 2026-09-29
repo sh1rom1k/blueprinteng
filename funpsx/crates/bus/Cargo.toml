@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-bus"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation memory map and bus stub"
+publish = false

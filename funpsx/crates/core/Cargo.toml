@@ -1,0 +1,17 @@
+[package]
+name = "funpsx-core"
+version = "0.1.0"
+edition = "2021"
+description = "funpsx machine: CPU, bus, and device stubs"
+publish = false
+
+[dependencies]
+funpsx-cpu = { path = "../cpu" }
+funpsx-bus = { path = "../bus" }
+funpsx-gpu = { path = "../gpu" }
+funpsx-gte = { path = "../gte" }
+funpsx-spu = { path = "../spu" }
+funpsx-cdrom = { path = "../cdrom" }
+funpsx-dma = { path = "../dma" }
+funpsx-timers = { path = "../timers" }
+funpsx-interrupts = { path = "../interrupts" }

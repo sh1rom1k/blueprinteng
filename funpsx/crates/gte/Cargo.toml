@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-gte"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation GTE stub"
+publish = false

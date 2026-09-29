@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-gpu"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation GPU stub"
+publish = false

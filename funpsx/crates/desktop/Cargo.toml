@@ -1,0 +1,15 @@
+[package]
+name = "funpsx"
+version = "0.1.0"
+edition = "2021"
+description = "funpsx desktop binary"
+publish = false
+
+[[bin]]
+name = "funpsx"
+path = "src/main.rs"
+
+[dependencies]
+funpsx-bus = { path = "../bus" }
+funpsx-core = { path = "../core" }
+funpsx-platform-desktop = { path = "../platform-desktop" }

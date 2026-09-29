@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-cdrom"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation CD-ROM stub"
+publish = false

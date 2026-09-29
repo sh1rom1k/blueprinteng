@@ -1,0 +1,10 @@
+[package]
+name = "funpsx-renderer-opengl"
+version = "0.1.0"
+edition = "2021"
+description = "OpenGL renderer backend for funpsx"
+publish = false
+
+[dependencies]
+funpsx-renderer = { path = "../renderer" }
+glow = "0.16"

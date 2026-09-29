@@ -1,0 +1,6 @@
+[package]
+name = "funpsx-spu"
+version = "0.1.0"
+edition = "2021"
+description = "PlayStation SPU stub"
+publish = false

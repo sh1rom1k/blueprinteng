@@ -1,5 +1,7 @@
 build/
 .venv/
+target/
+funpsx/target/
 
 # Local game archives. These are large and are not part of the engine source.
 textures/*.vpk
